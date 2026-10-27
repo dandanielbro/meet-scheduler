@@ -1,0 +1,16 @@
+{
+  // 喬時間的後端（Cloudflare Worker + D1）。網頁本身放在 GitHub Pages，不在這裡。
+  "name": "meet-scheduler-api",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-09-01",
+  "vars": {
+    "LINE_CHANNEL_ID": "2012248168"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "meet-scheduler",
+      "database_id": "0bd4c55c-e2a9-4f30-aedc-26ded43eebe0"
+    }
+  ]
+}

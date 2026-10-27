@@ -1,68 +1,66 @@
-// 週末喬時間：每週一個活動，成員畫出線下／線上可以的時間，系統找交集。
-const START_HOUR = 6;          // 06:00 開始
-const END_HOUR = 24;           // 24:00 結束
-const NSLOT = END_HOUR - START_HOUR;  // 每天 18 格，每格 1 小時
-const DAYS = 3;                // 週五、六、日
-const MIN_MEETING_MIN = 90;    // 至少要連續 1.5 小時
-const NEED = Math.ceil(MIN_MEETING_MIN / 60);  // 換成格數：2 格
-const DAY_NAMES = ['五', '六', '日'];
-const EMPTY = '0'.repeat(DAYS * NSLOT);  // 每格 0=不行 1=只能線上 2=線下可（線下可也代表線上可）
+// 喬時間：多人喬時間。LINE 登入確認身分，發起人自訂日期與時段，可以同時進行很多活動。
+// 每個人的時間是一串字元，第 d 天第 s 格在 d * nslot + s：0=不行 1=只能線上 2=線下可（也代表線上可）
+const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+const MODE_LABEL = { both: '線下優先，湊不齊改線上', offline: '只有線下', online: '只有線上' };
+// 還沒設定好，或在自己電腦上（localhost）打開，都用示範模式
+const DEMO = !(CONFIG.API_URL && CONFIG.LIFF_ID) || ['localhost', '127.0.0.1'].includes(location.hostname);
+const DEMO_USERS = [['u-dan', 'Dan'], ['u-ming', '阿明'], ['u-hua', '小華'], ['u-kai', '阿凱'], ['u-mei', '美美']];
+const MAX_DAYS = 14;
 
 const $app = document.getElementById('app');
-const params = new URLSearchParams(location.search);
-
-// ---------- 資料存取 ----------
-const remoteApi = async (payload) => {
-  const r = await fetch(CONFIG.API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },  // 避免 CORS 預檢
-    body: JSON.stringify(payload),
-  });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || '伺服器錯誤');
-  return j;
-};
-
-// 示範模式：沒有設定 API_URL 時，資料存在這台電腦的瀏覽器
-const localApi = async (p) => {
-  const db = store.get('demoDb', { events: {}, responses: {} });
-  const ev = db.events[p.id];
-  let out;
-  if (p.action === 'create') {
-    const id = randId(10), key = randId(16);
-    db.events[id] = { id, key, title: p.title, friday: p.friday, members: p.members };
-    out = { id, key };
-  } else if (p.action === 'get') {
-    if (!ev) throw new Error('找不到這個活動');
-    const { key, ...pub } = ev;
-    out = { event: pub, responses: Object.values(db.responses[p.id] || {}) };
-  } else if (p.action === 'save') {
-    if (!ev) throw new Error('找不到這個活動');
-    if (!ev.members.includes(p.name)) throw new Error('名單裡沒有這個名字');
-    (db.responses[p.id] ||= {})[p.name] = { name: p.name, slots: p.slots, updatedAt: Date.now() };
-    out = {};
-  } else if (p.action === 'members') {
-    if (!ev || ev.key !== p.key) throw new Error('管理連結不正確');
-    ev.members = p.members; ev.title = p.title || ev.title;
-    out = {};
-  }
-  store.set('demoDb', db);
-  return { ok: true, ...out };
-};
-
-const api = CONFIG.API_URL ? remoteApi : localApi;
+const auth = { token: null, me: null };
+let demoCall = null;
 
 const store = {
-  get(k, d) { try { const v = localStorage.getItem('ms:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('ms:' + k, JSON.stringify(v)); } catch {} },
+  get(k, d) { try { const v = localStorage.getItem('ms2:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('ms2:' + k, JSON.stringify(v)); } catch {} },
 };
 
-// ---------- 小工具 ----------
-function randId(n) {
-  const a = 'abcdefghijkmnpqrstuvwxyz23456789';
-  const b = crypto.getRandomValues(new Uint8Array(n));
-  return Array.from(b, (x) => a[x % a.length]).join('');
+// ---------- 登入與資料 ----------
+async function boot() {
+  if (DEMO) {
+    demoCall = await loadDemoBackend();
+    const u = store.get('demoUser', DEMO_USERS[0]);
+    auth.token = `demo|${u[0]}|${u[1]}`;
+    return true;
+  }
+  await loadScript('https://static.line-scdn.net/liff/edge/2/sdk.js');
+  await liff.init({ liffId: CONFIG.LIFF_ID });
+  if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return false; }
+  auth.token = liff.getIDToken();
+  if (!auth.token) throw new Error('拿不到 LINE 身分，請確認 LIFF 有勾選 openid');
+  return true;
 }
+
+function loadScript(src) {
+  return new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = ok; s.onerror = () => fail(new Error('LINE 登入元件載入失敗'));
+    document.head.appendChild(s);
+  });
+}
+
+async function call(action, data = {}) {
+  const payload = { action, idToken: auth.token, ...data };
+  let j;
+  if (DEMO) j = await demoCall(payload);
+  else {
+    const r = await fetch(CONFIG.API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },  // 避免 CORS 預檢
+      body: JSON.stringify(payload),
+    });
+    j = await r.json();
+  }
+  if (!j.ok) {
+    if (j.code === 'AUTH' && !DEMO) { liff.logout(); liff.login({ redirectUri: location.href }); }
+    throw new Error(j.error || '伺服器錯誤');
+  }
+  if (j.me) { auth.me = j.me; renderTop(); }
+  return j;
+}
+
+// ---------- 小工具 ----------
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -71,287 +69,510 @@ function toast(msg) {
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('show'), 1800);
 }
-function parseNames(text) {
-  const names = text.split(/[\n,，、;；]+/).map((s) => s.trim()).filter(Boolean).map((s) => s.slice(0, 20));
-  return [...new Set(names)];
-}
 function pad(n) { return String(n).padStart(2, '0'); }
 function ymd(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function parseYmd(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
-// 回傳這週末的週五（今天是週五～週日就回傳這個週五）
-function snapFriday(date) {
-  const d = new Date(date); const wd = d.getDay();  // 0 日 … 5 五 6 六
-  const back = { 5: 0, 6: 1, 0: 2 }[wd];
-  d.setDate(d.getDate() + (back !== undefined ? -back : 5 - wd));
-  return d;
+function addDays(s, n) { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); }
+function hm(min) { return `${pad(Math.floor(min / 60))}:${pad(min % 60)}`; }
+function dur(min) { return min < 60 ? `${min} 分鐘` : `${min / 60} 小時`; }
+function shortDate(s) { const d = parseYmd(s); return `${d.getMonth() + 1}/${d.getDate()}（${WEEK[d.getDay()]}）`; }
+function avatar(u) {
+  return u.picture ? `<img class="avatar" src="${esc(u.picture)}" alt="">` : `<span class="avatar">${esc((u.name || '?').slice(0, 1))}</span>`;
 }
-function dayDate(friday, i) { const d = parseYmd(friday); d.setDate(d.getDate() + i); return d; }
-function dayLabel(friday, i) { const d = dayDate(friday, i); return `${d.getMonth() + 1}/${d.getDate()}（${DAY_NAMES[i]}）`; }
-function rangeLabel(friday) { return `${dayLabel(friday, 0)} – ${dayLabel(friday, 2)}`; }
-function hourLabel(s) { return `${pad(START_HOUR + s)}:00`; }
-function windowLabel(friday, w) { return `${dayLabel(friday, w.day)} ${hourLabel(w.start)}–${hourLabel(w.end)}`; }
-function eventUrl(id, key) {
-  const u = new URL(location.href); u.search = '';
-  u.searchParams.set('e', id); if (key) u.searchParams.set('k', key);
-  return u.toString();
+function inviteUrl(id) {
+  return DEMO ? `${location.origin}${location.pathname}?e=${id}` : `https://liff.line.me/${CONFIG.LIFF_ID}?e=${id}`;
+}
+function linkBox(url) {
+  return `<div class="link-box"><input readonly value="${esc(url)}"><button type="button" data-copy="${esc(url)}">複製</button></div>`;
+}
+function bindCopy(root) {
+  root.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast('已複製'); }
+    catch { b.previousElementSibling.select(); toast('請長按複製'); }
+  }));
+}
+
+// ---------- 時間格的幾何 ----------
+function geom(c) {
+  const nslot = (c.endMin - c.startMin) / c.slotMin;
+  return { days: c.dates.length, nslot, total: c.dates.length * nslot, need: Math.ceil(c.minMin / c.slotMin) };
+}
+function slotTime(c, s) { return hm(c.startMin + s * c.slotMin); }
+function dayLabel(c, d) { return shortDate(c.dates[d]); }
+function windowLabel(c, w) { return `${dayLabel(c, w.day)} ${slotTime(c, w.start)}–${slotTime(c, w.end)}`; }
+function datesSummary(c) {
+  const n = c.dates.length;
+  if (n === 1) return dayLabel(c, 0);
+  const contiguous = c.dates.every((d, i) => i === 0 || addDays(c.dates[i - 1], 1) === d);
+  return `${dayLabel(c, 0)} – ${dayLabel(c, n - 1)}${contiguous ? '' : `（挑 ${n} 天）`}`;
+}
+function configSummary(c) {
+  return `${datesSummary(c)}・每天 ${hm(c.startMin)}–${hm(c.endMin)}・至少 ${dur(c.minMin)}・${MODE_LABEL[c.mode]}`;
 }
 
 // ---------- 找交集 ----------
-// 連續 ok 的格子組成時段，長度 >= NEED 才算
-function runs(ok) {
+function runs(ok, g) {
   const out = [];
-  for (let d = 0; d < DAYS; d++) {
+  for (let d = 0; d < g.days; d++) {
     let s = null;
-    for (let i = 0; i <= NSLOT; i++) {
-      const good = i < NSLOT && ok[d * NSLOT + i];
+    for (let i = 0; i <= g.nslot; i++) {
+      const good = i < g.nslot && ok[d * g.nslot + i];
       if (good && s === null) s = i;
-      if (!good && s !== null) { if (i - s >= NEED) out.push({ day: d, start: s, end: i }); s = null; }
+      if (!good && s !== null) { if (i - s >= g.need) out.push({ day: d, start: s, end: i }); s = null; }
     }
   }
   return out;
 }
 
-function analyze(ev, responses) {
-  const map = {};
-  responses.forEach((r) => { if (ev.members.includes(r.name)) map[r.name] = r.slots; });
-  const filled = ev.members.filter((m) => map[m]);
-  const pending = ev.members.filter((m) => !map[m]);
-  const n = DAYS * NSLOT;
-  const offAll = [], onAll = [];
-  for (let i = 0; i < n; i++) {
-    offAll[i] = filled.length > 0 && filled.every((m) => map[m][i] === '2');
-    onAll[i] = filled.length > 0 && filled.every((m) => map[m][i] !== '0');
+function analyze(ev) {
+  const c = ev.config, g = geom(c);
+  const filled = ev.members.filter((m) => m.slots.length === g.total);
+  const pending = ev.members.filter((m) => m.slots.length !== g.total);
+  const can = c.mode === 'offline' ? (v) => v === '2' : (v) => v !== '0';
+  const offAll = [], canAll = [];
+  for (let i = 0; i < g.total; i++) {
+    offAll[i] = filled.length > 0 && filled.every((m) => m.slots[i] === '2');
+    canAll[i] = filled.length > 0 && filled.every((m) => can(m.slots[i]));
   }
-  const offline = runs(offAll);
-  const online = offline.length ? [] : runs(onAll);
+  // 線下優先；只有「線下線上都可」的活動才會退回找線上
+  let kind = c.mode === 'online' ? 'online' : 'offline';
+  let windows = runs(kind === 'online' ? canAll : offAll, g);
+  if (!windows.length && c.mode === 'both') { kind = 'online'; windows = runs(canAll, g); }
 
   // 找不到全員交集時，列出最接近的時段（最多人可以），讓大家知道要喬誰
-  let closest = [];
-  if (!offline.length && !online.length && filled.length) {
+  const closest = [];
+  if (!windows.length && filled.length) {
     const cands = [];
-    for (let d = 0; d < DAYS; d++) {
-      for (let s = 0; s + NEED <= NSLOT; s++) {
-        const idx = Array.from({ length: NEED }, (_, k) => d * NSLOT + s + k);
-        const can = filled.filter((m) => idx.every((i) => map[m][i] !== '0'));
-        const off = filled.filter((m) => idx.every((i) => map[m][i] === '2'));
-        cands.push({ day: d, start: s, end: s + NEED, can: can.length, off: off.length,
-          missing: filled.filter((m) => !can.includes(m)) });
+    for (let d = 0; d < g.days; d++) {
+      for (let s = 0; s + g.need <= g.nslot; s++) {
+        const idx = Array.from({ length: g.need }, (_, k) => d * g.nslot + s + k);
+        const ok = filled.filter((m) => idx.every((i) => can(m.slots[i])));
+        cands.push({ day: d, start: s, end: s + g.need, can: ok.length,
+          missing: filled.filter((m) => !ok.includes(m)).map((m) => m.name) });
       }
     }
-    cands.sort((a, b) => b.can - a.can || b.off - a.off || a.day - b.day || a.start - b.start);
-    for (const c of cands) {
-      if (c.can === 0 || closest.length >= 3) break;
-      const dup = closest.some((x) => x.day === c.day && Math.abs(x.start - c.start) < NEED && x.missing.join() === c.missing.join());
-      if (!dup) closest.push(c);
+    cands.sort((a, b) => b.can - a.can || a.day - b.day || a.start - b.start);
+    for (const x of cands) {
+      if (x.can === 0 || closest.length >= 3) break;
+      const dup = closest.some((y) => y.day === x.day && Math.abs(y.start - x.start) < g.need && y.missing.join() === x.missing.join());
+      if (!dup) closest.push(x);
     }
   }
-  return { map, filled, pending, offline, online, closest };
+  return { g, filled, pending, windows: windows.length ? windows : [], kind: windows.length ? kind : null, closest, can };
 }
 
-// ---------- 首頁：發起活動 ----------
-function renderHome() {
-  const friday = ymd(snapFriday(new Date()));
-  const mine = store.get('myEvents', []);
-  $app.innerHTML = `
-    ${demoBanner()}
-    <h1>週末喬時間</h1>
-    <p class="muted">每週由一個人發起，邀請這週的成員。大家畫出週五到週日可以線下或線上的時間，系統先找線下交集，沒有再找線上。</p>
-    <form class="card" id="createForm">
-      <h2>發起這週的聚會</h2>
-      <label for="title">活動名稱</label>
-      <input id="title" required maxlength="40" placeholder="例如：讀書會 A 組">
-      <label for="friday">哪個週末</label>
-      <input id="friday" type="date" value="${friday}" required>
-      <p class="muted" id="rangeHint">${rangeLabel(friday)}</p>
-      <label for="creator">你的名字</label>
-      <input id="creator" required maxlength="20" value="${esc(store.get('lastName', ''))}">
-      <label for="members">這週還有誰（一行一個名字，或用逗號分開）</label>
-      <textarea id="members" placeholder="小明&#10;小華&#10;阿凱"></textarea>
-      <p style="margin-top:14px"><button class="primary" type="submit" id="createBtn">建立並取得邀請連結</button></p>
-    </form>
-    <div id="created"></div>
-    ${mine.length ? `<div class="card"><h2>我發起過的</h2>${mine.slice(0, 8).map((e) => `
-      <p><a href="${esc(eventUrl(e.id, e.key))}">${esc(e.title)}</a> <span class="muted">${esc(rangeLabel(e.friday))}</span></p>`).join('')}</div>` : ''}
-  `;
-  const $f = document.getElementById('friday');
-  $f.addEventListener('change', () => {
-    if (!$f.value) return;
-    $f.value = ymd(snapFriday(parseYmd($f.value)));
-    document.getElementById('rangeHint').textContent = rangeLabel($f.value);
-  });
-  document.getElementById('createForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const title = document.getElementById('title').value.trim();
-    const creator = document.getElementById('creator').value.trim().slice(0, 20);
-    const members = parseNames(creator + '\n' + document.getElementById('members').value);
-    if (members.length < 2) return toast('至少要邀請一位成員');
-    const btn = document.getElementById('createBtn'); btn.disabled = true; btn.textContent = '建立中…';
-    try {
-      const { id, key } = await api({ action: 'create', title, friday: $f.value, members });
-      store.set('lastName', creator);
-      store.set('me:' + id, creator);
-      store.set('myEvents', [{ id, key, title, friday: $f.value }, ...mine].slice(0, 20));
-      document.getElementById('createForm').remove();
-      document.getElementById('created').innerHTML = `
-        <div class="card">
-          <h2>建好了！</h2>
-          <p><b>邀請連結</b>：貼到群組給這週的成員</p>
-          ${linkBox(eventUrl(id))}
-          <p><b>管理連結</b>：自己留著，之後要加人、換人用</p>
-          ${linkBox(eventUrl(id, key))}
-          <p><a href="${esc(eventUrl(id, key))}">→ 進去填我的時間</a></p>
-        </div>`;
-      bindCopy();
-    } catch (err) {
-      toast(err.message); btn.disabled = false; btn.textContent = '建立並取得邀請連結';
-    }
-  });
+function statusOf(ev) {
+  const c = ev.config;
+  if (ev.decided) return `📌 已定案：${windowLabel(c, ev.decided)}（${ev.decided.mode === 'online' ? '線上' : '線下'}）`;
+  const a = analyze(ev);
+  const wait = a.pending.length ? `，還在等 ${a.pending.length} 人` : '';
+  if (!a.filled.length) return '⏳ 還沒有人填';
+  if (a.kind) return `${a.kind === 'offline' ? '✅ 線下' : '💻 線上'}：${windowLabel(c, a.windows[0])}${a.windows.length > 1 ? ` 等 ${a.windows.length} 個時段` : ''}${wait}`;
+  return a.pending.length ? `⏳ 還在等 ${a.pending.length} 人填` : '⚠️ 大家都填了，但找不到時間';
 }
 
-function linkBox(url) {
-  return `<div class="link-box"><input readonly value="${esc(url)}"><button type="button" data-copy="${esc(url)}">複製</button></div>`;
+// ---------- 頁面切換 ----------
+let dirty = false;
+let pollTimer = null;
+
+function go(url) {
+  if (dirty && !confirm('你的時間還沒儲存，確定要離開嗎？')) return;
+  setDirty(false);
+  history.pushState(null, '', url);
+  route();
 }
-function bindCopy() {
-  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); toast('已複製'); }
-    catch { b.previousElementSibling.select(); toast('請長按複製'); }
-  }));
+function route() {
+  clearInterval(pollTimer);
+  window.scrollTo(0, 0);
+  const q = new URLSearchParams(location.search);
+  if (q.get('e')) renderEvent(q.get('e'), q.has('created'));
+  else if (q.has('new')) renderNew(q.get('copy'));
+  else renderHome();
+}
+function home() { return location.pathname; }
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-nav]');
+  if (!a) return;
+  e.preventDefault(); go(a.getAttribute('href'));
+});
+window.addEventListener('popstate', () => { setDirty(false); route(); });
+window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+function renderTop() {
+  const me = auth.me;
+  document.getElementById('top').innerHTML = `
+    <a class="brand" href="${home()}" data-nav>喬時間</a><span class="grow"></span>
+    ${me ? `<span class="who">${avatar(me)}${esc(me.name)}</span>` : ''}`;
 }
 function demoBanner() {
-  return CONFIG.API_URL ? '' : '<div class="banner">示範模式：還沒接上試算表，資料只存在這台電腦。</div>';
+  if (!DEMO) return '';
+  const cur = store.get('demoUser', DEMO_USERS[0])[0];
+  return `<div class="banner">示範模式：資料只存在這台電腦。切換身分試試看
+    <select id="demoUser">${DEMO_USERS.map(([id, n]) => `<option value="${id}" ${id === cur ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
+}
+function bindDemo() {
+  const sel = document.getElementById('demoUser');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    const u = DEMO_USERS.find((x) => x[0] === sel.value);
+    store.set('demoUser', u); auth.token = `demo|${u[0]}|${u[1]}`;
+    setDirty(false); route();
+  });
+}
+function showError(err) {
+  $app.innerHTML = `${demoBanner()}<div class="card"><h2>出了點問題</h2><p class="muted">${esc(err.message)}</p>
+    <p><a href="${home()}" data-nav>回我的活動</a></p></div>`;
+  bindDemo();
 }
 
-// ---------- 活動頁 ----------
-const state = { id: params.get('e'), key: params.get('k'), ev: null, responses: [], me: null, draft: null, dirty: false, brush: '2', sel: null };
-
-async function loadEvent() {
-  const j = await api({ action: 'get', id: state.id });
-  state.ev = j.event; state.responses = j.responses;
-  const saved = store.get('me:' + state.id, null);
-  if (!state.me && saved && state.ev.members.includes(saved)) state.me = saved;
-  if (state.me && !state.ev.members.includes(state.me)) state.me = null;
-}
-
-async function renderEvent() {
-  try { await loadEvent(); }
-  catch (err) {
-    $app.innerHTML = `${demoBanner()}<div class="card"><h2>打不開這個活動</h2><p class="muted">${esc(err.message)}</p><p><a href="${esc(location.pathname)}">回首頁發起新的</a></p></div>`;
-    return;
-  }
-  const ev = state.ev;
-  document.title = `${ev.title}｜週末喬時間`;
+// ---------- 我的活動 ----------
+async function renderHome() {
+  document.title = '喬時間';
+  let j;
+  try { j = await call('mine'); } catch (err) { return showError(err); }
+  const today = ymd(new Date());
+  const evs = j.events.slice().sort((a, b) => a.config.dates[0].localeCompare(b.config.dates[0]));
+  const active = evs.filter((e) => e.config.dates[e.config.dates.length - 1] >= today);
+  const past = evs.filter((e) => !active.includes(e)).reverse();
   $app.innerHTML = `
     ${demoBanner()}
-    <h1>${esc(ev.title)}</h1>
-    <div class="row"><span class="muted grow">${esc(rangeLabel(ev.friday))}・至少連續 ${MIN_MEETING_MIN / 60} 小時</span>
-      <button id="refreshBtn" type="button">重新整理</button></div>
-    <div class="card" id="result"></div>
-    <div class="card">
-      <h2>我是誰？</h2>
-      <div class="chips" id="whoami"></div>
-      <div id="editorWrap"></div>
-    </div>
-    <div class="card">
-      <h2>大家的時間</h2>
-      <p class="muted">綠色＝全部已填的人都能線下；藍色＝都能線上；數字是「可以的人數／已填人數」。點格子看是誰。</p>
-      <div class="grid heat" id="heat"></div>
-      <div class="detail" id="detail"></div>
-    </div>
-    ${state.key ? adminCard() : ''}
-    <p class="muted"><a href="${esc(location.pathname)}">發起另一個活動</a></p>
-  `;
-  document.getElementById('refreshBtn').addEventListener('click', refresh);
-  if (state.key) bindAdmin();
-  renderResult(); renderWho(); renderEditor(); renderHeat();
+    <div class="row"><h1 class="grow">我的活動</h1><a class="btn primary" href="?new" data-nav>＋ 發起</a></div>
+    ${active.length ? active.map(eventCard).join('') : `<div class="card"><p>目前沒有進行中的活動。</p>
+      <p class="muted">按「＋ 發起」建立一個，再把邀請連結貼到 LINE 群組。別人發起的活動，點邀請連結加入後也會出現在這裡。</p></div>`}
+    ${past.length ? `<details class="past"><summary>已結束（${past.length}）</summary>${past.map(eventCard).join('')}</details>` : ''}`;
+  bindDemo();
 }
 
-async function refresh() {
-  try { await loadEvent(); } catch (err) { return toast(err.message); }
-  renderResult(); renderHeat();
-  if (!state.dirty) { renderWho(); renderEditor(); }
+function eventCard(ev) {
+  const g = geom(ev.config);
+  const mine = ev.members.find((m) => m.id === auth.me.id);
+  const todo = mine && mine.slots.length !== g.total && !ev.decided;
+  return `<a class="card ev" href="?e=${ev.id}" data-nav>
+    <div class="row"><b class="grow">${esc(ev.title)}</b>${ev.isOwner ? '<span class="tag">發起人</span>' : ''}${todo ? '<span class="tag warn">你還沒填</span>' : ''}</div>
+    <div class="muted">${esc(datesSummary(ev.config))}・${ev.members.length} 人</div>
+    <div class="st">${esc(statusOf(ev))}</div></a>`;
 }
 
-function renderResult() {
-  const ev = state.ev;
-  const a = analyze(ev, state.responses);
-  const list = (ws) => `<ul>${ws.map((w) => `<li>${esc(windowLabel(ev.friday, w))}</li>`).join('')}</ul>`;
-  const waitNote = a.pending.length
-    ? `<p class="muted">已填 ${a.filled.length}/${ev.members.length} 人，還在等：${esc(a.pending.join('、'))}。結果可能還會變。</p>` : '';
-  let html;
-  if (!a.filled.length) {
-    html = `<div class="status wait"><h2>還沒有人填</h2><p>選下面的名字，畫出你週末可以的時間。</p></div>`;
-  } else if (a.offline.length) {
-    html = `<div class="status ok-off"><h2>✅ 可以線下見面</h2><p>這些時間大家都能到場：</p>${list(a.offline)}${waitNote}</div>`;
-  } else if (a.online.length) {
-    html = `<div class="status ok-on"><h2>💻 線下湊不齊，改線上</h2><p>這些時間大家都能上線：</p>${list(a.online)}${waitNote}</div>`;
+// ---------- 發起活動 ----------
+async function renderNew(copyId) {
+  document.title = '發起活動｜喬時間';
+  let src = null;
+  if (copyId) { try { src = (await call('get', { id: copyId })).event; } catch (err) { toast(err.message); } }
+  const today = ymd(new Date());
+  const last = store.get('lastConfig', { startMin: 540, endMin: 1320, slotMin: 60, minMin: 90, mode: 'both' });
+  const base = src ? src.config : last;
+  const f = { startMin: base.startMin, endMin: base.endMin, slotMin: base.slotMin, minMin: base.minMin, mode: base.mode, dates: new Set() };
+  if (src) {
+    // 複製成下一輪：日期往後推整週，推到今天以後（至少推一週）
+    const behind = Math.ceil((parseYmd(today) - parseYmd(src.config.dates[0])) / 864e5 / 7);
+    const weeks = Math.max(1, behind);
+    src.config.dates.forEach((d) => f.dates.add(addDays(d, weeks * 7)));
   } else {
-    const close = a.closest.length ? `<p>最接近的時段：</p><ul>${a.closest.map((c) =>
-      `<li>${esc(windowLabel(ev.friday, c))}：${c.can}/${a.filled.length} 人可以${c.missing.length ? `，差 ${esc(c.missing.join('、'))}` : ''}</li>`).join('')}</ul>` : '';
-    html = a.pending.length
-      ? `<div class="status wait"><h2>目前還找不到共同時間</h2>${waitNote}${close}</div>`
-      : `<div class="status warn"><h2>⚠️ 大家都填完了，但找不到時間</h2><p>線下、線上都沒有連續 ${MIN_MEETING_MIN / 60} 小時全員都可以的時段。請大家看看能不能調整一下，改完重新儲存就會更新。</p>${close}</div>`;
+    weekend(0).forEach((d) => f.dates.add(d));
   }
-  document.getElementById('result').innerHTML = html;
-}
 
-function renderWho() {
-  const a = analyze(state.ev, state.responses);
-  const $w = document.getElementById('whoami');
-  $w.innerHTML = state.ev.members.map((m) =>
-    `<button type="button" class="chip ${m === state.me ? 'me' : a.map[m] ? 'done' : ''}" data-name="${esc(m)}">${esc(m)}${a.map[m] ? ' ✓' : ''}</button>`).join('');
-  $w.querySelectorAll('[data-name]').forEach((b) => b.addEventListener('click', () => {
-    if (state.dirty && !confirm('你的時間還沒儲存，確定要換人嗎？')) return;
-    state.me = b.dataset.name; store.set('me:' + state.id, state.me); store.set('lastName', state.me);
-    setDirty(false); renderWho(); renderEditor();
+  $app.innerHTML = `
+    ${demoBanner()}
+    <h1>${src ? '複製成新活動' : '發起活動'}</h1>
+    <form class="card" id="newForm">
+      <label for="title">活動名稱</label>
+      <input id="title" required maxlength="40" placeholder="例如：讀書會 A 組" value="${esc(src ? src.title : '')}">
+      <span class="label">哪幾天（點日期選取，最多 ${MAX_DAYS} 天）</span>
+      <div class="seg" style="margin-bottom:8px">
+        <button type="button" data-quick="0">這週末</button>
+        <button type="button" data-quick="1">下週末</button>
+        <button type="button" data-quick="clear">清除</button>
+      </div>
+      <div class="cal" id="cal"></div>
+      <p class="muted" id="dateHint"></p>
+      <span class="label">每天的時段</span>
+      <div class="two">
+        <select id="startMin">${hourOptions(0, 23, f.startMin)}</select><span>到</span>
+        <select id="endMin">${hourOptions(1, 24, f.endMin)}</select>
+      </div>
+      <span class="label">每格多久</span>
+      <div class="seg" id="slotSeg">
+        <button type="button" data-v="60">1 小時</button><button type="button" data-v="30">30 分鐘</button>
+      </div>
+      <label for="minMin">會議至少要多久（要有連續這麼長大家都可以）</label>
+      <select id="minMin">${[30, 60, 90, 120, 150, 180, 240].map((m) => `<option value="${m}" ${m === f.minMin ? 'selected' : ''}>${dur(m)}</option>`).join('')}</select>
+      <span class="label">形式</span>
+      <div class="seg" id="modeSeg">
+        <button type="button" data-v="both">線下優先，湊不齊改線上</button>
+        <button type="button" data-v="offline">只有線下</button>
+        <button type="button" data-v="online">只有線上</button>
+      </div>
+      ${src && src.isOwner && src.members.length > 1 ? `<label class="row" style="font-weight:400">
+        <input type="checkbox" id="copyMembers" checked style="width:auto"> 帶入原本的 ${src.members.length - 1} 位成員（之後可以移除）</label>` : ''}
+      <p style="margin-top:18px"><button class="primary" type="submit" id="createBtn">建立活動</button></p>
+    </form>`;
+  bindDemo();
+
+  const drawCal = () => {
+    document.getElementById('cal').innerHTML = calendarHtml(f.dates);
+    const sorted = [...f.dates].sort();
+    document.getElementById('dateHint').textContent = sorted.length
+      ? `已選 ${sorted.length} 天：${sorted.map(shortDate).join('、')}` : '還沒選日期';
+  };
+  const drawSeg = (id, val) => document.querySelectorAll(`#${id} button`).forEach((b) => b.classList.toggle('on', b.dataset.v === String(val)));
+  drawCal(); drawSeg('slotSeg', f.slotMin); drawSeg('modeSeg', f.mode);
+
+  document.getElementById('cal').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-d]');
+    if (!b || b.classList.contains('past')) return;
+    const d = b.dataset.d;
+    if (f.dates.has(d)) f.dates.delete(d);
+    else if (f.dates.size >= MAX_DAYS) return toast(`最多 ${MAX_DAYS} 天`);
+    else f.dates.add(d);
+    drawCal();
+  });
+  document.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
+    f.dates.clear();
+    if (b.dataset.quick !== 'clear') weekend(+b.dataset.quick).forEach((d) => f.dates.add(d));
+    drawCal();
   }));
+  document.querySelectorAll('#slotSeg button').forEach((b) => b.addEventListener('click', () => { f.slotMin = +b.dataset.v; drawSeg('slotSeg', f.slotMin); }));
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.addEventListener('click', () => { f.mode = b.dataset.v; drawSeg('modeSeg', f.mode); }));
+
+  document.getElementById('newForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const config = {
+      dates: [...f.dates].sort(), slotMin: f.slotMin, mode: f.mode,
+      startMin: +document.getElementById('startMin').value, endMin: +document.getElementById('endMin').value,
+      minMin: +document.getElementById('minMin').value,
+    };
+    if (!config.dates.length) return toast('請至少選一天');
+    if (config.startMin >= config.endMin) return toast('結束時間要比開始晚');
+    if (config.minMin > config.endMin - config.startMin) return toast('會議長度比每天的時段還長');
+    const btn = document.getElementById('createBtn'); btn.disabled = true; btn.textContent = '建立中…';
+    try {
+      const cm = document.getElementById('copyMembers');
+      const { id } = await call('create', { title: document.getElementById('title').value, config,
+        copyFrom: src ? src.id : '', copyMembers: !!(cm && cm.checked) });
+      const { dates, ...rest } = config;
+      store.set('lastConfig', rest);
+      go(`?e=${id}&created=1`);
+    } catch (err) { toast(err.message); btn.disabled = false; btn.textContent = '建立活動'; }
+  });
 }
 
-function renderEditor() {
-  const $wrap = document.getElementById('editorWrap');
-  if (!state.me) { $wrap.innerHTML = '<p class="muted">點你的名字開始填。名單沒有你？請發起人用管理連結加你。</p>'; return; }
-  if (!state.dirty) {
-    const mine = state.responses.find((r) => r.name === state.me);
-    state.draft = (mine ? mine.slots : EMPTY).split('');
-  }
-  $wrap.innerHTML = `
-    <p class="muted" style="margin-top:12px">選一種顏色，在格子上點或拖曳。點星期可以整天填滿。</p>
-    <div class="toolbar">
-      <button type="button" class="brush" data-brush="2"><span class="dot off"></span>線下可</button>
-      <button type="button" class="brush" data-brush="1"><span class="dot on"></span>只能線上</button>
-      <button type="button" class="brush" data-brush="0"><span class="dot no"></span>不行</button>
-    </div>
-    <div class="grid editor" id="editor"></div>`;
-  $wrap.querySelectorAll('.brush').forEach((b) => b.addEventListener('click', () => { state.brush = b.dataset.brush; markBrush(); }));
-  markBrush();
-  const $g = document.getElementById('editor');
-  $g.innerHTML = gridHtml((i) => `<div class="cell v${state.draft[i]}" data-i="${i}"></div>`, true);
-  bindPaint($g);
+function hourOptions(from, to, sel) {
+  let h = '';
+  for (let x = from; x <= to; x++) h += `<option value="${x * 60}" ${x * 60 === sel ? 'selected' : ''}>${pad(x)}:00</option>`;
+  return h;
 }
 
-function markBrush() {
-  document.querySelectorAll('.brush').forEach((b) => b.classList.toggle('active', b.dataset.brush === state.brush));
+// 這週末（offset=0）或下週末的週五～週日，已經過去的日子不算
+function weekend(offset) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  const back = { 5: 0, 6: 1, 0: 2 }[d.getDay()];
+  d.setDate(d.getDate() + (back !== undefined ? -back : 5 - d.getDay()) + offset * 7);
+  const today = ymd(new Date());
+  return [0, 1, 2].map((i) => addDays(ymd(d), i)).filter((x) => x >= today);
 }
 
-function gridHtml(cell, tapHeads) {
-  let h = '<div></div>';
-  for (let d = 0; d < DAYS; d++) h += `<div class="head ${tapHeads ? 'tap' : ''}" data-day="${d}">${esc(dayLabel(state.ev.friday, d))}</div>`;
-  for (let s = 0; s < NSLOT; s++) {
-    h += `<div class="time">${hourLabel(s)}</div>`;
-    for (let d = 0; d < DAYS; d++) h += cell(d * NSLOT + s);
+function calendarHtml(sel) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start = new Date(today); start.setDate(start.getDate() - ((start.getDay() + 6) % 7));  // 這週一
+  const last = [...sel].sort().pop();
+  const span = last ? Math.round((parseYmd(last) - start) / 864e5) + 1 : 0;
+  const weeks = Math.min(12, Math.max(6, Math.ceil(span / 7)));
+  let h = ['一', '二', '三', '四', '五', '六', '日'].map((w) => `<div class="wd">${w}</div>`).join('');
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const key = ymd(d), first = i === 0 || d.getDate() === 1;
+    h += `<button type="button" data-d="${key}" class="${sel.has(key) ? 'sel' : ''} ${d < today ? 'past' : ''} ${first ? 'm1' : ''}">${first ? `${d.getMonth() + 1}/${d.getDate()}` : d.getDate()}</button>`;
   }
   return h;
 }
 
-function bindPaint($g) {
+// ---------- 活動頁 ----------
+const ui = { ev: null, page: 0, draft: null, brush: '2', sel: null };
+
+function perPage() { return window.innerWidth >= 640 ? 7 : 3; }
+function pageDays() {
+  const n = ui.ev.config.dates.length, pp = perPage();
+  ui.page = Math.min(ui.page, Math.ceil(n / pp) - 1);
+  return Array.from({ length: Math.min(pp, n - ui.page * pp) }, (_, k) => ui.page * pp + k);
+}
+
+async function loadEv(id) { ui.ev = (await call('get', { id })).event; }
+
+async function renderEvent(id, created) {
+  try { await loadEv(id); } catch (err) { return showError(err); }
+  ui.sel = null; ui.draft = null;
+  // 預設翻到還沒過去的第一天
+  const today = ymd(new Date());
+  const first = ui.ev.config.dates.findIndex((d) => d >= today);
+  ui.page = first > 0 ? Math.floor(first / perPage()) : 0;
+  drawEvent(created);
+  pollTimer = setInterval(async () => {
+    if (document.visibilityState !== 'visible' || dirty) return;
+    try { await loadEv(id); } catch { return; }
+    drawResult(); drawMembers(); drawHeat(); drawEditor();
+  }, 30000);
+}
+
+function drawEvent(created) {
+  const ev = ui.ev, c = ev.config;
+  document.title = `${ev.title}｜喬時間`;
+  const share = !DEMO && liff.isApiAvailable && liff.isApiAvailable('shareTargetPicker');
+  $app.innerHTML = `
+    ${demoBanner()}
+    <h1>${esc(ev.title)}</h1>
+    <p class="muted">${esc(configSummary(c))}</p>
+    ${ev.isOwner && (created || ev.members.length < 2) ? `<div class="card"><h2>${created ? '建好了！' : ''}邀請大家加入</h2>
+      <p>把邀請連結貼到 LINE 群組，大家用 LINE 登入後按「加入」就能填時間。</p>
+      ${linkBox(inviteUrl(ev.id))}${share ? '<button type="button" id="shareBtn">分享到 LINE</button>' : ''}</div>` : ''}
+    <div class="card" id="result"></div>
+    ${ev.joined ? '' : `<div class="card">${ev.status === 'open'
+      ? `<h2>你還沒加入</h2><p>加入後就能畫出你可以的時間。</p><p><button class="primary" id="joinBtn">加入這個活動</button></p>`
+      : '<h2>發起人已關閉加入</h2><p class="muted">需要加入的話，請發起人重新開放。</p>'}</div>`}
+    <div class="card"><h2 id="memberTitle">成員</h2><div class="chips" id="members"></div></div>
+    ${ev.joined ? '<div class="card"><h2>我的時間</h2><div id="editorWrap"></div></div>' : ''}
+    <div class="card"><h2>大家的時間</h2>
+      <p class="muted">${c.mode === 'both' ? '<span class="dot off"></span> 全部已填的人都能線下　<span class="dot on"></span> 都能線上' : '<span class="dot off"></span> 全部已填的人都可以'}。數字是「可以的人數／已填人數」，點格子看是誰。</p>
+      <div id="heatWrap"></div><div class="detail" id="detail"></div></div>
+    ${ev.isOwner ? ownerCard() : ''}
+    ${ev.joined && !ev.isOwner ? '<p><button class="link" id="leaveBtn">退出這個活動</button></p>' : ''}`;
+  bindDemo(); bindCopy($app);
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  on('shareBtn', () => liff.shareTargetPicker([{ type: 'text', text: `來喬「${ev.title}」的時間：${inviteUrl(ev.id)}` }]).catch(() => {}));
+  on('joinBtn', () => act(() => call('join', { id: ev.id }), '已加入', true));
+  on('leaveBtn', async () => {
+    if (!confirm('確定要退出嗎？你填的時間會一起刪掉。')) return;
+    try { await call('remove', { id: ev.id, userId: auth.me.id }); toast('已退出'); go(home()); } catch (err) { toast(err.message); }
+  });
+  if (ev.isOwner) bindOwner();
+  drawResult(); drawMembers(); drawEditor(); drawHeat();
+}
+
+// 執行一個動作後重新載入活動頁
+async function act(fn, msg, full) {
+  try { await fn(); } catch (err) { return toast(err.message); }
+  if (msg) toast(msg);
+  await loadEv(ui.ev.id);
+  if (full) drawEvent(); else { drawResult(); drawMembers(); drawHeat(); }
+}
+
+function drawResult() {
+  const ev = ui.ev, c = ev.config;
+  const $r = document.getElementById('result');
+  if (ev.decided) {
+    const d = ev.decided, g = geom(c), long = d.end - d.start > g.need;
+    $r.innerHTML = `<div class="status decided"><h2>📌 已定案</h2>
+      <p><b>${esc(windowLabel(c, d))}</b>・${d.mode === 'online' ? '線上' : '線下'}</p>
+      ${long ? `<p class="muted">這段時間內挑 ${dur(c.minMin)}開會。</p>` : ''}
+      ${ev.isOwner ? '<p><button class="small" id="undecide">取消定案</button></p>' : ''}</div>`;
+    const u = document.getElementById('undecide');
+    if (u) u.addEventListener('click', () => act(() => call('update', { id: ev.id, decided: null }), '已取消定案'));
+    return;
+  }
+  const a = analyze(ev);
+  const total = ev.members.length;
+  const decideBtn = (w) => ev.isOwner ? ` <button class="small" data-decide="${w.day},${w.start},${w.end}">定這個</button>` : '';
+  const list = (ws) => `<ul>${ws.map((w) => `<li>${esc(windowLabel(c, w))}${decideBtn(w)}</li>`).join('')}</ul>`;
+  const waitNote = a.pending.length
+    ? `<p class="muted">已填 ${a.filled.length}/${total} 人，還在等：${esc(a.pending.map((m) => m.name).join('、'))}。結果可能還會變。</p>` : '';
+  let html;
+  if (!a.filled.length) {
+    html = `<div class="status wait"><h2>還沒有人填</h2><p>${ev.joined ? '在「我的時間」畫出你可以的時間。' : '加入後就能填時間。'}</p></div>`;
+  } else if (a.kind === 'offline') {
+    html = `<div class="status ok-off"><h2>✅ ${c.mode === 'both' ? '可以線下見面' : '找到時間了'}</h2><p>這些時間大家都能到場：</p>${list(a.windows)}${waitNote}</div>`;
+  } else if (a.kind === 'online') {
+    html = `<div class="status ok-on"><h2>💻 ${c.mode === 'both' ? '線下湊不齊，改線上' : '找到時間了'}</h2><p>這些時間大家都能上線：</p>${list(a.windows)}${waitNote}</div>`;
+  } else {
+    const close = a.closest.length ? `<p>最接近的時段：</p><ul>${a.closest.map((x) =>
+      `<li>${esc(windowLabel(c, x))}：${x.can}/${a.filled.length} 人可以${x.missing.length ? `，差 ${esc(x.missing.join('、'))}` : ''}</li>`).join('')}</ul>` : '';
+    html = a.pending.length
+      ? `<div class="status wait"><h2>目前還找不到共同時間</h2>${waitNote}${close}</div>`
+      : `<div class="status warn"><h2>⚠️ 大家都填完了，但找不到時間</h2><p>沒有連續 ${dur(c.minMin)} 全員都可以的時段。請大家看看能不能調整，改完重新儲存就會更新。</p>${close}</div>`;
+  }
+  $r.innerHTML = html;
+  $r.querySelectorAll('[data-decide]').forEach((b) => b.addEventListener('click', () => {
+    const [day, start, end] = b.dataset.decide.split(',').map(Number);
+    act(() => call('update', { id: ev.id, decided: { day, start, end, mode: a.kind } }), '已定案');
+  }));
+}
+
+function drawMembers() {
+  const ev = ui.ev, g = geom(ev.config);
+  document.getElementById('memberTitle').textContent = `成員（${ev.members.length}）`;
+  const $m = document.getElementById('members');
+  $m.innerHTML = ev.members.map((m) => {
+    const done = m.slots.length === g.total;
+    const x = ev.isOwner && m.id !== ev.ownerId ? `<button class="x" data-rm="${esc(m.id)}" title="移除">×</button>` : '';
+    return `<span class="chip ${done ? 'done' : ''}">${avatar(m)}${esc(m.name)}${m.id === ev.ownerId ? '（發起人）' : ''}${done ? ' ✓' : ''}${x}</span>`;
+  }).join('');
+  $m.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => {
+    const m = ev.members.find((x) => x.id === b.dataset.rm);
+    if (!confirm(`要把 ${m.name} 移出這個活動嗎？他填的時間會一起刪掉。`)) return;
+    act(() => call('remove', { id: ev.id, userId: m.id }), '已移除');
+  }));
+}
+
+function gridHtml(cell, editable) {
+  const c = ui.ev.config, g = geom(c), days = pageDays();
+  let h = `<div class="grid ${editable ? 'editor' : 'heat'}" style="grid-template-columns: 52px repeat(${days.length}, 1fr); --rowh: ${c.slotMin === 30 ? 22 : 28}px">`;
+  h += '<div></div>' + days.map((d) => `<div class="head ${editable ? 'tap' : ''}" data-day="${d}">${esc(dayLabel(c, d))}</div>`).join('');
+  for (let s = 0; s < g.nslot; s++) {
+    const t = c.startMin + s * c.slotMin;
+    h += `<div class="time">${t % 60 ? '' : hm(t)}</div>`;
+    days.forEach((d) => { h += cell(d * g.nslot + s); });
+  }
+  return h + '</div>';
+}
+
+function pagerHtml() {
+  const c = ui.ev.config, n = c.dates.length, pp = perPage();
+  if (n <= pp) return '';
+  const days = pageDays();
+  return `<div class="pager"><button type="button" data-pg="-1" ${ui.page === 0 ? 'disabled' : ''}>◀</button>
+    <span>${esc(dayLabel(c, days[0]))}${days.length > 1 ? ` – ${esc(dayLabel(c, days[days.length - 1]))}` : ''}</span>
+    <button type="button" data-pg="1" ${(ui.page + 1) * pp >= n ? 'disabled' : ''}>▶</button></div>`;
+}
+function bindPager(root) {
+  root.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click', () => {
+    ui.page += +b.dataset.pg; drawEditor(); drawHeat();
+  }));
+}
+
+function drawEditor() {
+  const $wrap = document.getElementById('editorWrap');
+  if (!$wrap) return;
+  const ev = ui.ev, c = ev.config, g = geom(c);
+  if (!dirty || !ui.draft) {
+    const mine = ev.members.find((m) => m.id === auth.me.id);
+    ui.draft = (mine && mine.slots.length === g.total ? mine.slots : '0'.repeat(g.total)).split('');
+  }
+  const brushes = c.mode === 'both'
+    ? [['2', 'off', '線下可'], ['1', 'on', '只能線上'], ['0', 'no', '不行']]
+    : [['2', 'off', '可以'], ['0', 'no', '不行']];
+  if (!brushes.some((b) => b[0] === ui.brush)) ui.brush = '2';
+  $wrap.innerHTML = `
+    <p class="muted">選一種顏色，在格子上點或拖曳。點日期可以整天填滿。</p>
+    <div class="toolbar">${brushes.map(([v, cls, t]) => `<button type="button" class="brush ${v === ui.brush ? 'active' : ''}" data-brush="${v}"><span class="dot ${cls}"></span>${t}</button>`).join('')}</div>
+    ${pagerHtml()}${gridHtml((i) => `<div class="cell v${ui.draft[i]}" data-i="${i}"></div>`, true)}`;
+  $wrap.querySelectorAll('.brush').forEach((b) => b.addEventListener('click', () => {
+    ui.brush = b.dataset.brush;
+    $wrap.querySelectorAll('.brush').forEach((x) => x.classList.toggle('active', x === b));
+  }));
+  bindPager($wrap);
+  bindPaint($wrap.querySelector('.grid'), g);
+}
+
+function bindPaint($g, g) {
   let paintVal = null, last = null;
   const setOne = (i) => {
-    if (state.draft[i] === paintVal) return;
-    state.draft[i] = paintVal; $g.querySelector(`[data-i="${i}"]`).className = 'cell v' + paintVal; setDirty(true);
+    if (ui.draft[i] === paintVal) return;
+    ui.draft[i] = paintVal;
+    $g.querySelector(`[data-i="${i}"]`).className = 'cell v' + paintVal;
+    setDirty(true);
   };
   // 手指滑太快會跳過格子：同一天就把中間的格子一起補上
   const setCell = (el) => {
     const i = +el.dataset.i;
-    if (last !== null && Math.floor(last / NSLOT) === Math.floor(i / NSLOT)) {
+    if (last !== null && Math.floor(last / g.nslot) === Math.floor(i / g.nslot)) {
       for (let k = Math.min(last, i); k <= Math.max(last, i); k++) setOne(k);
     } else setOne(i);
     last = i;
@@ -364,7 +585,7 @@ function bindPaint($g) {
     const el = e.target.closest('.cell'); if (!el) return;
     e.preventDefault();
     // 在已經是同色的格子上按下＝改成清除
-    paintVal = state.draft[+el.dataset.i] === state.brush ? '0' : state.brush;
+    paintVal = ui.draft[+el.dataset.i] === ui.brush ? '0' : ui.brush;
     $g.setPointerCapture(e.pointerId);
     setCell(el);
   });
@@ -372,89 +593,88 @@ function bindPaint($g) {
   const end = () => { paintVal = null; last = null; };
   $g.addEventListener('pointerup', end); $g.addEventListener('pointercancel', end);
   $g.querySelectorAll('.head.tap').forEach((h) => h.addEventListener('click', () => {
-    const d = +h.dataset.day; const idx = Array.from({ length: NSLOT }, (_, s) => d * NSLOT + s);
-    const v = idx.every((i) => state.draft[i] === state.brush) ? '0' : state.brush;
-    idx.forEach((i) => { state.draft[i] = v; });
-    $g.querySelectorAll('.cell').forEach((c) => { c.className = 'cell v' + state.draft[+c.dataset.i]; });
+    const d = +h.dataset.day, idx = Array.from({ length: g.nslot }, (_, s) => d * g.nslot + s);
+    const v = idx.every((i) => ui.draft[i] === ui.brush) ? '0' : ui.brush;
+    idx.forEach((i) => { ui.draft[i] = v; });
+    $g.querySelectorAll('.cell').forEach((x) => { x.className = 'cell v' + ui.draft[+x.dataset.i]; });
     setDirty(true);
   }));
 }
 
 function setDirty(v) {
-  state.dirty = v;
+  dirty = v;
   document.getElementById('savebar').classList.toggle('show', v);
 }
 
 async function save() {
   const btn = document.getElementById('saveBtn'); btn.disabled = true; btn.textContent = '儲存中…';
   try {
-    await api({ action: 'save', id: state.id, name: state.me, slots: state.draft.join('') });
+    await call('save', { id: ui.ev.id, slots: ui.draft.join('') });
     setDirty(false); toast('已儲存');
-    await loadEvent(); renderResult(); renderWho(); renderHeat();
+    await loadEv(ui.ev.id); drawResult(); drawMembers(); drawHeat();
   } catch (err) { toast(err.message); }
   btn.disabled = false; btn.textContent = '儲存我的時間';
 }
 
-function renderHeat() {
-  const a = analyze(state.ev, state.responses);
-  const total = a.filled.length;
-  const $h = document.getElementById('heat');
-  $h.innerHTML = gridHtml((i) => {
-    const can = a.filled.filter((m) => a.map[m][i] !== '0').length;
-    const off = a.filled.filter((m) => a.map[m][i] === '2').length;
+function drawHeat() {
+  const ev = ui.ev, a = analyze(ev), total = a.filled.length;
+  const $h = document.getElementById('heatWrap');
+  $h.innerHTML = pagerHtml() + gridHtml((i) => {
+    const can = a.filled.filter((m) => a.can(m.slots[i])).length;
+    const off = a.filled.filter((m) => m.slots[i] === '2').length;
     let cls = '', style = '';
-    if (total && off === total) cls = 'all-off';
-    else if (total && can === total) cls = 'all-on';
+    if (total && ev.config.mode !== 'online' && off === total) cls = 'all-off';
+    else if (total && can === total) cls = ev.config.mode === 'online' ? 'all-off' : 'all-on';
     else if (can) style = `style="background: color-mix(in srgb, var(--on) ${Math.round(can / total * 45)}%, var(--cell))"`;
-    return `<div class="cell ${cls} ${state.sel === i ? 'sel' : ''}" data-i="${i}" ${style}>${total ? `${can}/${total}` : ''}</div>`;
+    return `<div class="cell ${cls} ${ui.sel === i ? 'sel' : ''}" data-i="${i}" ${style}>${total ? `${can}/${total}` : ''}</div>`;
   }, false);
-  $h.querySelectorAll('.cell').forEach((c) => c.addEventListener('click', () => { state.sel = +c.dataset.i; renderHeat(); }));
-  renderDetail(a);
+  bindPager($h);
+  $h.querySelectorAll('.cell').forEach((x) => x.addEventListener('click', () => { ui.sel = +x.dataset.i; drawHeat(); }));
+  drawDetail(a);
 }
 
-function renderDetail(a) {
-  const $d = document.getElementById('detail');
-  if (state.sel === null || !a.filled.length) { $d.innerHTML = ''; return; }
-  const i = state.sel, d = Math.floor(i / NSLOT), s = i % NSLOT;
-  const pick = (v) => a.filled.filter((m) => a.map[m][i] === v).join('、') || '—';
-  $d.innerHTML = `<b>${esc(dayLabel(state.ev.friday, d))} ${hourLabel(s)}–${hourLabel(s + 1)}</b><br>
-    <span class="dot off"></span> 線下：${esc(pick('2'))}<br>
-    <span class="dot on"></span> 只能線上：${esc(pick('1'))}<br>
-    <span class="dot no"></span> 不行：${esc(pick('0'))}${a.pending.length ? `<br><span class="muted">未填：${esc(a.pending.join('、'))}</span>` : ''}`;
+function drawDetail(a) {
+  const $d = document.getElementById('detail'), c = ui.ev.config;
+  if (ui.sel === null || !a.filled.length) { $d.innerHTML = ''; return; }
+  const i = ui.sel, d = Math.floor(i / a.g.nslot), s = i % a.g.nslot;
+  const pick = (v) => a.filled.filter((m) => m.slots[i] === v).map((m) => m.name).join('、') || '—';
+  const rows = c.mode === 'both'
+    ? `<span class="dot off"></span> 線下：${esc(pick('2'))}<br><span class="dot on"></span> 只能線上：${esc(pick('1'))}<br>`
+    : `<span class="dot off"></span> 可以：${esc(pick('2'))}<br>`;
+  $d.innerHTML = `<b>${esc(dayLabel(c, d))} ${slotTime(c, s)}–${slotTime(c, s + 1)}</b><br>${rows}
+    <span class="dot no"></span> 不行：${esc(pick('0'))}${a.pending.length ? `<br><span class="muted">未填：${esc(a.pending.map((m) => m.name).join('、'))}</span>` : ''}`;
 }
 
-// ---------- 管理：調整名單 ----------
-function adminCard() {
-  return `<div class="card" id="admin">
-    <h2>管理（只有你看得到）</h2>
-    <p><b>邀請連結</b>：貼到群組</p>
-    ${linkBox(eventUrl(state.id))}
-    <label for="adminTitle">活動名稱</label>
-    <input id="adminTitle" maxlength="40" value="${esc(state.ev.title)}">
-    <label for="adminMembers">這週名單（一行一個）</label>
-    <textarea id="adminMembers">${esc(state.ev.members.join('\n'))}</textarea>
-    <p class="muted">移除的人，他填過的時間不會算進結果。</p>
-    <p><button class="primary" type="button" id="adminSave">更新名單</button></p>
+// ---------- 發起人設定 ----------
+function ownerCard() {
+  const ev = ui.ev;
+  return `<div class="card">
+    <h2>發起人設定</h2>
+    <p><b>邀請連結</b></p>${linkBox(inviteUrl(ev.id))}
+    <label for="ownTitle">活動名稱</label>
+    <div class="row"><input id="ownTitle" class="grow" maxlength="40" value="${esc(ev.title)}"><button type="button" id="ownTitleBtn">改名</button></div>
+    <span class="label">加入</span>
+    <div class="row"><span class="grow">${ev.status === 'open' ? '開放中：拿到連結的人都能加入' : '已關閉：只有現有成員'}</span>
+      <button type="button" id="ownStatus">${ev.status === 'open' ? '關閉加入' : '重新開放'}</button></div>
+    <span class="label">下一輪</span>
+    <p><a class="btn" href="?new&copy=${ev.id}" data-nav>複製成新活動</a></p>
+    <p class="muted">日期往後推一週、沿用時段設定，可以帶入原本的成員再增減。</p>
   </div>`;
 }
-function bindAdmin() {
-  bindCopy();
-  document.getElementById('adminSave').addEventListener('click', async () => {
-    const members = parseNames(document.getElementById('adminMembers').value);
-    if (members.length < 2) return toast('名單至少要兩個人');
-    try {
-      await api({ action: 'members', id: state.id, key: state.key, members, title: document.getElementById('adminTitle').value.trim() });
-      toast('名單已更新'); renderEvent();
-    } catch (err) { toast(err.message); }
-  });
+function bindOwner() {
+  const ev = ui.ev;
+  document.getElementById('ownTitleBtn').addEventListener('click', () =>
+    act(() => call('update', { id: ev.id, title: document.getElementById('ownTitle').value }), '已改名', true));
+  document.getElementById('ownStatus').addEventListener('click', () =>
+    act(() => call('update', { id: ev.id, status: ev.status === 'open' ? 'closed' : 'open' }), '已更新', true));
 }
 
 // ---------- 啟動 ----------
 document.getElementById('saveBtn').addEventListener('click', save);
-window.addEventListener('beforeunload', (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ''; } });
-if (state.id) {
-  renderEvent();
-  setInterval(() => { if (document.visibilityState === 'visible' && state.ev) refresh(); }, 30000);
-} else {
-  renderHome();
-}
+let lastPP = perPage();
+window.addEventListener('resize', () => {
+  if (perPage() === lastPP || !ui.ev || !document.getElementById('heatWrap')) return;
+  lastPP = perPage(); drawEditor(); drawHeat();
+});
+renderTop();
+boot().then((ok) => { if (ok) route(); }).catch(showError);

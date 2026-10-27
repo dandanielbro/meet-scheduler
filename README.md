@@ -1,37 +1,64 @@
-# 週末喬時間
+# 喬時間
 
-幫朋友群組喬週五到週日的開會時間。每週由一個人發起、邀請這週的成員，大家畫出可以「線下」或「只能線上」的時間，系統：
+幫一群人喬時間的小網站。用 LINE 登入，發起人自訂日期、每天的時段和會議長度，可以同時進行很多活動。
 
-1. 先找全員都能線下、連續至少 1.5 小時的時段
-2. 沒有的話，找全員都能線上的時段
-3. 還是沒有，等全部的人都填完就顯示警示，並列出「最接近的時段、差誰」
+- 大家畫出可以「線下」或「只能線上」的時間
+- 系統先找全員都能線下、連續夠長的時段；沒有的話找線上；全部的人都填完還是沒有，就跳警示並列出「最接近的時段、差誰」
+- 發起人可以按「定這個」把時間定案、移除成員、關閉加入、複製成下一輪
+- 「我的活動」列出自己發起和參加的所有活動
 
-- 前端：GitHub Pages（本 repo）
-- 資料：Google 試算表 + Apps Script（`gas/Code.gs`）
-- 朋友打開連結不用登入
+## 架構
 
-## 第一次設定（約 5 分鐘）
+| 部分 | 放在哪 | 檔案 |
+|---|---|---|
+| 網頁 | GitHub Pages | `index.html`、`app.js`、`config.js` |
+| 後端 | Cloudflare Worker `meet-scheduler-api` | `worker/index.js`（入口、LINE 驗證、D1 存取） |
+| 規則 | 後端和示範模式共用 | `worker/core.js` |
+| 資料 | Cloudflare D1 `meet-scheduler` | `worker/schema.sql` |
+| 身分 | LINE Login channel `2012248168` 的 LIFF | `config.js`、`wrangler.jsonc` |
 
-1. 開一個新的 Google 試算表，取名「週末喬時間資料」。
-2. 選單 **擴充功能 → Apps Script**，刪掉預設的程式，貼上 [`gas/Code.gs`](gas/Code.gs) 全部內容，按儲存。
-3. 右上 **部署 → 新增部署作業**，左邊齒輪選 **網頁應用程式**：
-   - 執行身分：**我**
-   - 誰可以存取：**所有人**
-4. 按部署，依提示授權（看到「Google 尚未驗證這個應用程式」→ 進階 → 前往…）。
-5. 複製「網頁應用程式網址」（結尾是 `/exec`），貼到 `config.js` 的 `API_URL`，commit、push。
+後端網址：https://meet-scheduler-api.tun-tun-dan.workers.dev
 
-之後改了 `Code.gs`，要用 **部署 → 管理部署作業 → 編輯 → 版本選「新版本」**，網址才會維持不變。
+**示範模式**：在 localhost 打開，或 `config.js` 任一個值留空時，網頁在瀏覽器裡直接執行 `worker/core.js`，用假的身分登入（頁面上方可以切換），資料只存在這台電腦。
 
-## 每週怎麼用
+## 常用指令
 
-1. 發起人打開網站首頁，填活動名稱、週末日期、這週成員 → 拿到 **邀請連結** 和 **管理連結**。
-2. 邀請連結貼到群組；管理連結自己留著，換人、加人用。
-3. 成員點自己的名字，選顏色在格子上點或拖曳，按「儲存我的時間」。
+```bash
+npm run deploy        # 改了 worker/ 之後重新部署後端
+npm run dev           # 在本機跑後端（用本機的 D1，.dev.vars 允許假身分）
+npx wrangler d1 execute meet-scheduler --remote --command "SELECT * FROM events"   # 查線上資料
+```
 
-不同組各自發起，各有自己的連結，互不干擾。
+改網頁（`index.html`、`app.js`）只要 commit、push 到 GitHub，Pages 會自動更新。
 
-## 設計上的取捨
+## 費用
 
-- 沒有帳號密碼：拿到邀請連結的人都能幫名單上任何人填。朋友之間夠用。
-- 時間格是 06:00–24:00、每格 1 小時；「至少 1.5 小時」在每格 1 小時的情況下等於要連續 2 格。要改在 `app.js` 最上面的常數（改格數的話 `gas/Code.gs` 的 `NSLOT_TOTAL` 也要一起改）。
-- `config.js` 留空時是示範模式，資料只存在自己的瀏覽器。
+全部用免費方案，不會自動扣款：
+
+- **Cloudflare Workers 免費方案**：每天 10 萬次請求。超過時當天的請求會失敗，不會收費。
+- **D1 免費方案**：5GB、每天 500 萬列讀取、10 萬列寫入。超過一樣是失敗，不收費。
+- **LINE Login / LIFF**：免費。
+- **GitHub Pages**：公開 repo 免費。
+
+要確認帳號是免費方案：Cloudflare 後台 → Workers & Pages，方案顯示 Free；Billing → Subscriptions 沒有付費項目。只要不主動升級到 Workers Paid，就不會有帳單。
+
+## LINE 設定（已完成）
+
+- LINE Login channel：`2012248168`，狀態必須是 **Published**，否則只有開發者能登入
+- LIFF ID：`2012248168-2WFKdkTB`，Size Full，Scopes 勾 openid + profile
+- Endpoint URL：`https://dandanielbro.github.io/meet-scheduler/`
+
+LIFF ID 的前半段就是它所屬 channel 的 Channel ID，`wrangler.jsonc` 的 `LINE_CHANNEL_ID` 必須跟它一樣，不然登入驗證會失敗。
+
+## 每次怎麼用
+
+1. 發起人打開網站 →「＋ 發起」→ 填名稱、點選日期、每天時段、每格多久、至少多久、形式。
+2. 把邀請連結（`https://liff.line.me/...`）貼到 LINE 群組。
+3. 大家點連結、按「加入」、在格子上畫自己的時間、按「儲存我的時間」。
+4. 有結果後，發起人按「定這個」定案。下一輪用「複製成新活動」：日期往後推一週，可以帶入原本的成員再增減。
+
+## 限制
+
+- 一個活動最多 14 天、50 人；每格 30 或 60 分鐘。
+- 建立後不能改日期和時段（改了大家填的格子會對不上），要改就用「複製成新活動」。
+- 「全部的人都填完」指的是已加入的成員，還沒點連結加入的人系統不知道。
