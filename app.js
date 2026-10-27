@@ -82,6 +82,11 @@ function avatar(u) {
 function inviteUrl(id) {
   return DEMO ? `${location.origin}${location.pathname}?e=${id}` : `https://liff.line.me/${CONFIG.LIFF_ID}?e=${id}`;
 }
+// 地點：網址就做成連結，一般文字附上 Google 地圖搜尋
+function placeHtml(place) {
+  if (/^https?:\/\/\S+$/i.test(place)) return `<a href="${esc(place)}" target="_blank" rel="noopener">${esc(place)}</a>`;
+  return `${esc(place)} <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}" target="_blank" rel="noopener">地圖</a>`;
+}
 function linkBox(url) {
   return `<div class="link-box"><input readonly value="${esc(url)}"><button type="button" data-copy="${esc(url)}">複製</button></div>`;
 }
@@ -249,7 +254,7 @@ function eventCard(ev) {
   const todo = mine && mine.slots.length !== g.total && !ev.decided;
   return `<a class="card ev" href="?e=${ev.id}" data-nav>
     <div class="row"><b class="grow">${esc(ev.title)}</b>${ev.isOwner ? '<span class="tag">發起人</span>' : ''}${todo ? '<span class="tag warn">你還沒填</span>' : ''}</div>
-    <div class="muted">${esc(datesSummary(ev.config))}・${ev.members.length} 人</div>
+    <div class="muted">${esc(datesSummary(ev.config))}・${ev.members.length} 人${ev.place ? `・📍 ${esc(ev.place.length > 20 ? ev.place.slice(0, 20) + '…' : ev.place)}` : ''}</div>
     <div class="st">${esc(statusOf(ev))}</div></a>`;
 }
 
@@ -277,6 +282,8 @@ async function renderNew(copyId) {
     <form class="card" id="newForm">
       <label for="title">活動名稱</label>
       <input id="title" required maxlength="40" placeholder="例如：讀書會 A 組" value="${esc(src ? src.title : '')}">
+      <label for="place">地點（選填）</label>
+      <input id="place" maxlength="100" placeholder="例如：板橋車站附近的咖啡廳，或線上會議連結" value="${esc(src ? src.place : '')}">
       <span class="label">哪幾天（點日期選取，最多 ${MAX_DAYS} 天）</span>
       <div class="seg" style="margin-bottom:8px">
         <button type="button" data-quick="0">這週末</button>
@@ -347,7 +354,7 @@ async function renderNew(copyId) {
     const btn = document.getElementById('createBtn'); btn.disabled = true; btn.textContent = '建立中…';
     try {
       const cm = document.getElementById('copyMembers');
-      const { id } = await call('create', { title: document.getElementById('title').value, config,
+      const { id } = await call('create', { title: document.getElementById('title').value, place: document.getElementById('place').value, config,
         copyFrom: src ? src.id : '', copyMembers: !!(cm && cm.checked) });
       const { dates, ...rest } = config;
       store.set('lastConfig', rest);
@@ -421,6 +428,7 @@ function drawEvent(created) {
     ${demoBanner()}
     <h1>${esc(ev.title)}</h1>
     <p class="muted">${esc(configSummary(c))}</p>
+    ${ev.place ? `<p>📍 ${placeHtml(ev.place)}</p>` : ''}
     ${ev.isOwner && (created || ev.members.length < 2) ? `<div class="card"><h2>${created ? '建好了！' : ''}邀請大家加入</h2>
       <p>把邀請連結貼到 LINE 群組，大家用 LINE 登入後按「加入」就能填時間。</p>
       ${linkBox(inviteUrl(ev.id))}${share ? '<button type="button" id="shareBtn">分享到 LINE</button>' : ''}</div>` : ''}
@@ -491,7 +499,7 @@ function reminderText(ev) {
     body = `大家都填完了，但還找不到 ${dur(c.minMin)}全員都可以的時間 😵` +
       `${x ? `\n最接近的是 ${windowLabel(c, x)}，差 ${x.missing.join('、')}` : ''}\n可以調整的人再改一下 🙏\n👉`;
   }
-  return `【${ev.title}】${datesSummary(c)}\n${body} ${link}`;
+  return `【${ev.title}】${datesSummary(c)}${ev.place ? `\n📍 地點：${ev.place}` : ''}\n${body} ${link}`;
 }
 
 function drawRemind() {
@@ -704,6 +712,8 @@ function ownerCard() {
     <p><b>邀請連結</b></p>${linkBox(inviteUrl(ev.id))}
     <label for="ownTitle">活動名稱</label>
     <div class="row"><input id="ownTitle" class="grow" maxlength="40" value="${esc(ev.title)}"><button type="button" id="ownTitleBtn">改名</button></div>
+    <label for="ownPlace">地點（選填，留空就是不顯示）</label>
+    <div class="row"><input id="ownPlace" class="grow" maxlength="100" value="${esc(ev.place)}" placeholder="地點或線上會議連結"><button type="button" id="ownPlaceBtn">儲存地點</button></div>
     <span class="label">加入</span>
     <div class="row"><span class="grow">${ev.status === 'open' ? '開放中：拿到連結的人都能加入' : '已關閉：只有現有成員'}</span>
       <button type="button" id="ownStatus">${ev.status === 'open' ? '關閉加入' : '重新開放'}</button></div>
@@ -717,6 +727,8 @@ function ownerCard() {
 }
 function bindOwner() {
   const ev = ui.ev;
+  document.getElementById('ownPlaceBtn').addEventListener('click', () =>
+    act(() => call('update', { id: ev.id, place: document.getElementById('ownPlace').value }), '地點已更新', true));
   document.getElementById('ownTitleBtn').addEventListener('click', () =>
     act(() => call('update', { id: ev.id, title: document.getElementById('ownTitle').value }), '已改名', true));
   document.getElementById('ownStatus').addEventListener('click', () =>

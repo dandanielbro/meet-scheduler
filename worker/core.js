@@ -31,9 +31,10 @@ async function get(p, me, store) {
 
 async function create(p, me, store) {
   const title = str(p.title, 40, '活動名稱');
+  const place = optStr(p.place, 100);
   const config = checkConfig(p.config);
   const id = rand(10);
-  await store.insertEvent({ id, ownerId: me.id, title, config });
+  await store.insertEvent({ id, ownerId: me.id, title, place, config });
   await store.addMember(id, me.id);
   // 複製舊活動時，把原本的成員一起帶進來（只有原發起人能這樣做）
   if (p.copyFrom && p.copyMembers) {
@@ -77,10 +78,11 @@ async function update(p, me, store) {
   const ev = await mustEvent(store, p.id);
   if (ev.ownerId !== me.id) throw new Error('只有發起人可以修改');
   const title = p.title !== undefined ? str(p.title, 40, '活動名稱') : ev.title;
+  const place = p.place !== undefined ? optStr(p.place, 100) : ev.place;
   const status = p.status !== undefined ? (p.status === 'closed' ? 'closed' : 'open') : ev.status;
   let decided = ev.decided;
   if (p.decided !== undefined) decided = p.decided ? checkDecided(p.decided, ev.config) : null;
-  await store.updateEvent(ev.id, { title, status, decided });
+  await store.updateEvent(ev.id, { title, place, status, decided });
   return {};
 }
 
@@ -101,7 +103,7 @@ async function mustEvent(store, id) {
 function view(ev, members, me) {
   const list = members.map((m) => ({ id: m.userId, name: m.name || '（未知）', picture: m.picture || '', slots: m.slots || '' }));
   return {
-    id: ev.id, title: ev.title, config: ev.config, status: ev.status, decided: ev.decided,
+    id: ev.id, title: ev.title, place: ev.place || '', config: ev.config, status: ev.status, decided: ev.decided,
     ownerId: ev.ownerId, isOwner: ev.ownerId === me.id, joined: list.some((m) => m.id === me.id), members: list,
   };
 }
@@ -139,6 +141,11 @@ function geom(c) {
 
 function err(msg, code) {
   const e = new Error(msg); e.code = code; return e;
+}
+
+// 選填的文字，可以是空字串
+function optStr(v, max) {
+  return String(v || '').trim().slice(0, max);
 }
 
 function str(v, max, label) {
