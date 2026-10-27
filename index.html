@@ -23,7 +23,9 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.55 -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
-main { max-width: 720px; margin: 0 auto; padding: 8px 16px 96px; }
+main { max-width: 720px; margin: 0 auto; padding: 8px 16px 16px; }
+.foot { max-width: 720px; margin: 0 auto; padding: 16px 16px 96px; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 13px; text-align: center; }
 h1 { font-size: 24px; margin: 8px 0 2px; }
 h2 { font-size: 18px; margin: 0 0 10px; }
 p { margin: 6px 0; }
@@ -125,6 +127,10 @@ button.danger { color: var(--warn); border-color: var(--warn); }
 <body>
 <header class="top" id="top"></header>
 <main id="app"><p class="muted">載入中…</p></main>
+<footer class="foot">
+  這個小工具是 Dan 做的。有想回饋的地方，或想請我幫忙做點什麼，歡迎到 IG 找我
+  <a href="https://www.instagram.com/danielliou0427/" target="_blank" rel="noopener">@danielliou0427</a>
+</footer>
 <div class="savebar" id="savebar"><div class="inner">
   <span class="grow muted">你的時間還沒儲存</span>
   <button class="primary" id="saveBtn">儲存我的時間</button>
