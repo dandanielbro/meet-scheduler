@@ -112,7 +112,7 @@ function checkConfig(c) {
     throw new Error('每天的時段不對');
   }
   const minMin = Number(c.minMin);
-  if (!(minMin >= 30 && minMin <= endMin - startMin && minMin % 30 === 0)) throw new Error('會議長度不對');
+  if (!(minMin >= 30 && minMin <= endMin - startMin && minMin % 30 === 0)) throw new Error('活動長度不對');
   const mode = MODES.includes(c.mode) ? c.mode : 'both';
   return { dates: uniq, startMin, endMin, slotMin, minMin, mode };
 }

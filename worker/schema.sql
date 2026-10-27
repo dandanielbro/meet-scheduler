@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL,
   title TEXT NOT NULL,
-  config TEXT NOT NULL,         -- JSON：日期、每天時段、每格長度、會議長度、形式
+  config TEXT NOT NULL,         -- JSON：日期、每天時段、每格長度、活動長度、形式
   status TEXT NOT NULL DEFAULT 'open',
   decided TEXT,                 -- JSON：定案的時段，沒定案是 NULL
   created_at INTEGER NOT NULL,

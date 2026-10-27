@@ -294,7 +294,7 @@ async function renderNew(copyId) {
       <div class="seg" id="slotSeg">
         <button type="button" data-v="60">1 小時</button><button type="button" data-v="30">30 分鐘</button>
       </div>
-      <label for="minMin">會議至少要多久（要有連續這麼長大家都可以）</label>
+      <label for="minMin">活動至少要多久（要有連續這麼長大家都可以）</label>
       <select id="minMin">${[30, 60, 90, 120, 150, 180, 240].map((m) => `<option value="${m}" ${m === f.minMin ? 'selected' : ''}>${dur(m)}</option>`).join('')}</select>
       <span class="label">形式</span>
       <div class="seg" id="modeSeg">
@@ -343,7 +343,7 @@ async function renderNew(copyId) {
     };
     if (!config.dates.length) return toast('請至少選一天');
     if (config.startMin >= config.endMin) return toast('結束時間要比開始晚');
-    if (config.minMin > config.endMin - config.startMin) return toast('會議長度比每天的時段還長');
+    if (config.minMin > config.endMin - config.startMin) return toast('活動長度比每天的時段還長');
     const btn = document.getElementById('createBtn'); btn.disabled = true; btn.textContent = '建立中…';
     try {
       const cm = document.getElementById('copyMembers');
@@ -462,7 +462,7 @@ function drawResult() {
     const d = ev.decided, g = geom(c), long = d.end - d.start > g.need;
     $r.innerHTML = `<div class="status decided"><h2>📌 已定案</h2>
       <p><b>${esc(windowLabel(c, d))}</b>・${d.mode === 'online' ? '線上' : '線下'}</p>
-      ${long ? `<p class="muted">這段時間內挑 ${dur(c.minMin)}開會。</p>` : ''}
+      ${long ? `<p class="muted">這段時間內挑 ${dur(c.minMin)}進行活動。</p>` : ''}
       ${ev.isOwner ? '<p><button class="small" id="undecide">取消定案</button></p>' : ''}</div>`;
     const u = document.getElementById('undecide');
     if (u) u.addEventListener('click', () => act(() => call('update', { id: ev.id, decided: null }), '已取消定案'));
