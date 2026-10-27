@@ -34,6 +34,10 @@ window.loadDemoBackend = async function () {
     async removeMember(eventId, userId) {
       db.members = db.members.filter((m) => !(m.eventId === eventId && m.userId === userId));
     },
+    async deleteEvent(id) {
+      db.members = db.members.filter((m) => m.eventId !== id);
+      db.events = db.events.filter((e) => e.id !== id);
+    },
   };
   // 示範 token 長這樣：demo|使用者id|名字
   const verify = async (t) => {

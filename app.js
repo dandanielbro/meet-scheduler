@@ -425,6 +425,11 @@ function drawEvent(created) {
       <p>把邀請連結貼到 LINE 群組，大家用 LINE 登入後按「加入」就能填時間。</p>
       ${linkBox(inviteUrl(ev.id))}${share ? '<button type="button" id="shareBtn">分享到 LINE</button>' : ''}</div>` : ''}
     <div class="card" id="result"></div>
+    ${ev.joined ? `<div class="card"><h2>提醒大家</h2>
+      <p class="muted">複製這段文字貼到 LINE 群組，會跟著目前的狀況更新；貼之前也可以先改。</p>
+      <textarea id="remindText" rows="7"></textarea>
+      <div class="row" style="margin-top:8px"><button type="button" class="primary" id="remindCopy">複製提醒文字</button>
+        ${share ? '<button type="button" id="remindShare">分享到 LINE</button>' : ''}</div></div>` : ''}
     ${ev.joined ? '' : `<div class="card">${ev.status === 'open'
       ? `<h2>你還沒加入</h2><p>加入後就能畫出你可以的時間。</p><p><button class="primary" id="joinBtn">加入這個活動</button></p>`
       : '<h2>發起人已關閉加入</h2><p class="muted">需要加入的話，請發起人重新開放。</p>'}</div>`}
@@ -438,6 +443,14 @@ function drawEvent(created) {
   bindDemo(); bindCopy($app);
   const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   on('shareBtn', () => liff.shareTargetPicker([{ type: 'text', text: `來喬「${ev.title}」的時間：${inviteUrl(ev.id)}` }]).catch(() => {}));
+  on('remindCopy', async () => {
+    const t = document.getElementById('remindText');
+    try { await navigator.clipboard.writeText(t.value); toast('已複製，貼到群組吧'); }
+    catch { t.select(); toast(document.execCommand('copy') ? '已複製，貼到群組吧' : '請長按文字複製'); }
+  });
+  on('remindShare', () => liff.shareTargetPicker([{ type: 'text', text: document.getElementById('remindText').value }]).catch(() => {}));
+  const $rt = document.getElementById('remindText');
+  if ($rt) $rt.addEventListener('input', () => { $rt.dataset.edited = '1'; });
   on('joinBtn', () => act(() => call('join', { id: ev.id }), '已加入', true));
   on('leaveBtn', async () => {
     if (!confirm('確定要退出嗎？你填的時間會一起刪掉。')) return;
@@ -455,9 +468,42 @@ async function act(fn, msg, full) {
   if (full) drawEvent(); else { drawResult(); drawMembers(); drawHeat(); }
 }
 
+// 貼到群組的提醒文字，依目前狀況寫，最後附上連結
+function reminderText(ev) {
+  const c = ev.config, a = analyze(ev), link = inviteUrl(ev.id);
+  const modeOf = (k) => (k === 'online' ? '線上' : '線下');
+  const names = (list) => list.map((m) => m.name).join('、');
+  const joinNote = ev.status === 'open' ? '\n還沒加入的也可以點連結加入。' : '';
+  let body;
+  if (ev.decided) {
+    const d = ev.decided, long = d.end - d.start > a.g.need;
+    body = `📌 時間定好了：${windowLabel(c, d)}（${modeOf(d.mode)}）${long ? `\n這段時間內挑 ${dur(c.minMin)}進行活動。` : ''}\n詳情看這裡 👉`;
+  } else if (!a.filled.length) {
+    body = `來喬時間囉！點連結用 LINE 登入，畫出你可以的時間 🙏${joinNote}\n👉`;
+  } else if (a.kind) {
+    const ws = a.windows.slice(0, 3).map((w) => `・${windowLabel(c, w)}（${modeOf(a.kind)}）`).join('\n');
+    body = `目前大家都可以的時間：\n${ws}${a.windows.length > 3 ? '\n…還有其他時段' : ''}` +
+      `${a.pending.length ? `\n還沒填的：${names(a.pending)}，麻煩填一下 🙏` : ''}${joinNote}\n👉`;
+  } else if (a.pending.length) {
+    body = `還沒填的：${names(a.pending)}，麻煩點連結畫一下你可以的時間 🙏${joinNote}\n👉`;
+  } else {
+    const x = a.closest[0];
+    body = `大家都填完了，但還找不到 ${dur(c.minMin)}全員都可以的時間 😵` +
+      `${x ? `\n最接近的是 ${windowLabel(c, x)}，差 ${x.missing.join('、')}` : ''}\n可以調整的人再改一下 🙏\n👉`;
+  }
+  return `【${ev.title}】${datesSummary(c)}\n${body} ${link}`;
+}
+
+function drawRemind() {
+  const $t = document.getElementById('remindText');
+  // 使用者正在改的時候不要蓋掉
+  if ($t && !$t.dataset.edited && document.activeElement !== $t) $t.value = reminderText(ui.ev);
+}
+
 function drawResult() {
   const ev = ui.ev, c = ev.config;
   const $r = document.getElementById('result');
+  drawRemind();
   if (ev.decided) {
     const d = ev.decided, g = geom(c), long = d.end - d.start > g.need;
     $r.innerHTML = `<div class="status decided"><h2>📌 已定案</h2>
@@ -499,10 +545,15 @@ function drawMembers() {
   const ev = ui.ev, g = geom(ev.config);
   document.getElementById('memberTitle').textContent = `成員（${ev.members.length}）`;
   const $m = document.getElementById('members');
+  const label = (m) => `${esc(m.name)}${m.id === ev.ownerId ? '（發起人）' : ''}`;
+  // 發起人看到的是一列一人、每人旁邊有「移出」；其他人看到名字小卡
+  $m.className = ev.isOwner ? 'mlist' : 'chips';
   $m.innerHTML = ev.members.map((m) => {
     const done = m.slots.length === g.total;
-    const x = ev.isOwner && m.id !== ev.ownerId ? `<button class="x" data-rm="${esc(m.id)}" title="移除">×</button>` : '';
-    return `<span class="chip ${done ? 'done' : ''}">${avatar(m)}${esc(m.name)}${m.id === ev.ownerId ? '（發起人）' : ''}${done ? ' ✓' : ''}${x}</span>`;
+    if (!ev.isOwner) return `<span class="chip ${done ? 'done' : ''}">${avatar(m)}${label(m)}${done ? ' ✓' : ''}</span>`;
+    return `<div class="mrow">${avatar(m)}<span class="grow">${label(m)}</span>
+      <span class="muted">${done ? '已填 ✓' : '未填'}</span>
+      ${m.id !== ev.ownerId ? `<button type="button" class="small danger" data-rm="${esc(m.id)}">移出</button>` : ''}</div>`;
   }).join('');
   $m.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => {
     const m = ev.members.find((x) => x.id === b.dataset.rm);
@@ -659,6 +710,9 @@ function ownerCard() {
     <span class="label">下一輪</span>
     <p><a class="btn" href="?new&copy=${ev.id}" data-nav>複製成新活動</a></p>
     <p class="muted">日期往後推一週、沿用時段設定，可以帶入原本的成員再增減。</p>
+    <span class="label">刪除</span>
+    <p><button type="button" class="danger" id="ownDelete">刪除這個活動</button></p>
+    <p class="muted">所有人填的時間會一起刪掉，無法復原。</p>
   </div>`;
 }
 function bindOwner() {
@@ -667,6 +721,11 @@ function bindOwner() {
     act(() => call('update', { id: ev.id, title: document.getElementById('ownTitle').value }), '已改名', true));
   document.getElementById('ownStatus').addEventListener('click', () =>
     act(() => call('update', { id: ev.id, status: ev.status === 'open' ? 'closed' : 'open' }), '已更新', true));
+  document.getElementById('ownDelete').addEventListener('click', async () => {
+    if (!confirm(`確定要刪除「${ev.title}」嗎？所有人填的時間都會一起刪掉，無法復原。`)) return;
+    try { await call('delete', { id: ev.id }); } catch (err) { return toast(err.message); }
+    setDirty(false); toast('已刪除'); go(home());
+  });
 }
 
 // ---------- 啟動 ----------

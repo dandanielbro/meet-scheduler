@@ -108,5 +108,11 @@ function d1Store(db) {
 
     removeMember: (eventId, userId) => db.prepare('DELETE FROM members WHERE event_id = ?1 AND user_id = ?2')
       .bind(eventId, userId).run(),
+
+    // 活動和所有成員的時間一起刪掉（同一批執行，不會只刪一半）
+    deleteEvent: (id) => db.batch([
+      db.prepare('DELETE FROM members WHERE event_id = ?1').bind(id),
+      db.prepare('DELETE FROM events WHERE id = ?1').bind(id),
+    ]),
   };
 }

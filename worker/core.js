@@ -6,7 +6,7 @@ const MODES = ['both', 'offline', 'online'];  // 線下線上都可／只有線�
 
 export async function handle(p, { store, verify }) {
   try {
-    const fn = { mine, get, create, join, save, remove, update }[p && p.action];
+    const fn = { mine, get, create, join, save, remove, update, delete: del }[p && p.action];
     if (!fn) throw new Error('未知的動作');
     const me = await verify(p.idToken);
     if (!me) throw err('登入已過期，請重新打開', 'AUTH');
@@ -81,6 +81,13 @@ async function update(p, me, store) {
   let decided = ev.decided;
   if (p.decided !== undefined) decided = p.decided ? checkDecided(p.decided, ev.config) : null;
   await store.updateEvent(ev.id, { title, status, decided });
+  return {};
+}
+
+async function del(p, me, store) {
+  const ev = await mustEvent(store, p.id);
+  if (ev.ownerId !== me.id) throw new Error('只有發起人可以刪除活動');
+  await store.deleteEvent(ev.id);
   return {};
 }
 
