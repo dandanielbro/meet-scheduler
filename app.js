@@ -178,7 +178,19 @@ function statusOf(ev) {
 
 // ---------- 頁面切換 ----------
 let dirty = false;
-let pollTimer = null;
+let routeId = 0;        // 每次換頁加一；資料回來時頁面已經換掉，就不要畫
+let refresher = null;   // 目前這頁的「重新整理」要做的事
+
+async function refreshNow(manual) {
+  if (!refresher || refreshNow.busy) return;
+  refreshNow.busy = true; renderTop();
+  try { await refresher(); if (manual) toast('已更新'); }
+  catch (err) { if (manual) toast(err.message); }
+  refreshNow.busy = false; renderTop();
+}
+// 每 20 秒自動更新；從別的 App 切回來時也馬上更新
+setInterval(() => { if (document.visibilityState === 'visible') refreshNow(false); }, 20000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshNow(false); });
 
 function go(url) {
   if (dirty && !confirm('你的時間還沒儲存，確定要離開嗎？')) return;
@@ -187,7 +199,7 @@ function go(url) {
   route();
 }
 function route() {
-  clearInterval(pollTimer);
+  routeId++; refresher = null; renderTop();
   window.scrollTo(0, 0);
   const q = new URLSearchParams(location.search);
   if (q.get('e')) renderEvent(q.get('e'), q.has('created'));
@@ -207,7 +219,10 @@ function renderTop() {
   const me = auth.me;
   document.getElementById('top').innerHTML = `
     <a class="brand" href="${home()}" data-nav>喬時間</a><span class="grow"></span>
+    ${refresher ? `<button type="button" class="small" id="refreshBtn" ${refreshNow.busy ? 'disabled' : ''}>${refreshNow.busy ? '更新中…' : '↻ 重新整理'}</button>` : ''}
     ${me ? `<span class="who">${avatar(me)}${esc(me.name)}</span>` : ''}`;
+  const b = document.getElementById('refreshBtn');
+  if (b) b.addEventListener('click', () => refreshNow(true));
 }
 function demoBanner() {
   if (!DEMO) return '';
@@ -233,8 +248,11 @@ function showError(err) {
 // ---------- 我的活動 ----------
 async function renderHome() {
   document.title = '喬時間';
+  const rid = routeId;
   let j;
-  try { j = await call('mine'); } catch (err) { return showError(err); }
+  try { j = await call('mine'); } catch (err) { return rid === routeId && showError(err); }
+  if (rid !== routeId) return;
+  const pastOpen = document.querySelector('details.past')?.open;
   const today = ymd(new Date());
   const evs = j.events.slice().sort((a, b) => a.config.dates[0].localeCompare(b.config.dates[0]));
   const active = evs.filter((e) => e.config.dates[e.config.dates.length - 1] >= today);
@@ -244,8 +262,9 @@ async function renderHome() {
     <div class="row"><h1 class="grow">我的活動</h1><a class="btn primary" href="?new" data-nav>＋ 發起</a></div>
     ${active.length ? active.map(eventCard).join('') : `<div class="card"><p>目前沒有進行中的活動。</p>
       <p class="muted">按「＋ 發起」建立一個，再把邀請連結貼到 LINE 群組。別人發起的活動，點邀請連結加入後也會出現在這裡。</p></div>`}
-    ${past.length ? `<details class="past"><summary>已結束（${past.length}）</summary>${past.map(eventCard).join('')}</details>` : ''}`;
+    ${past.length ? `<details class="past" ${pastOpen ? 'open' : ''}><summary>已結束（${past.length}）</summary>${past.map(eventCard).join('')}</details>` : ''}`;
   bindDemo();
+  if (!refresher) { refresher = renderHome; renderTop(); }
 }
 
 function eventCard(ev) {
@@ -406,18 +425,23 @@ function pageDays() {
 async function loadEv(id) { ui.ev = (await call('get', { id })).event; }
 
 async function renderEvent(id, created) {
-  try { await loadEv(id); } catch (err) { return showError(err); }
+  const rid = routeId;
+  try { await loadEv(id); } catch (err) { return rid === routeId && showError(err); }
+  if (rid !== routeId) return;
   ui.sel = null; ui.draft = null;
   // 預設翻到還沒過去的第一天
   const today = ymd(new Date());
   const first = ui.ev.config.dates.findIndex((d) => d >= today);
   ui.page = first > 0 ? Math.floor(first / perPage()) : 0;
   drawEvent(created);
-  pollTimer = setInterval(async () => {
-    if (document.visibilityState !== 'visible' || dirty) return;
-    try { await loadEv(id); } catch { return; }
-    drawResult(); drawMembers(); drawHeat(); drawEditor();
-  }, 30000);
+  // 重新整理：更新結果、成員和大家的時間；自己正在畫、還沒儲存的格子不動
+  refresher = async () => {
+    await loadEv(id);
+    if (rid !== routeId) return;
+    drawResult(); drawMembers(); drawHeat();
+    if (!dirty) drawEditor();
+  };
+  renderTop();
 }
 
 function drawEvent(created) {
