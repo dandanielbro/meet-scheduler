@@ -22,7 +22,7 @@
 }
 * { box-sizing: border-box; }
 /* 點兩下不會放大畫面（兩指縮放還是可以） */
-html, body { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+html, body { touch-action: manipulation; -webkit-text-size-adjust: 100%; overscroll-behavior: none; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 16px/1.55 -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
 main { max-width: 720px; margin: 0 auto; padding: 8px 16px 16px; }
@@ -151,8 +151,9 @@ button.save-cta { background: var(--warn); border-color: var(--warn); color: #ff
   <button type="button" class="save-cta" data-save>儲存我的時間</button>
 </div></div>
 <div class="toast" id="toast"></div>
-<script src="config.js"></script>
-<script src="demo.js"></script>
-<script src="app.js"></script>
+<script>window.APP_VERSION = '20261029-104304';</script>
+<script src="config.js?v=20261029-104304"></script>
+<script src="demo.js?v=20261029-104304"></script>
+<script src="app.js?v=20261029-104304"></script>
 </body>
 </html>

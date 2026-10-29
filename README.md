@@ -24,6 +24,7 @@
 ## 常用指令
 
 ```bash
+npm run bump          # 改了網頁（app.js、index.html…）推上去之前跑，開著舊頁面的人會自動換新版
 npm run deploy        # 改了 worker/ 之後重新部署後端
 npm run dev           # 在本機跑後端（用本機的 D1，.dev.vars 允許假身分）
 npx wrangler d1 execute meet-scheduler --remote --command "SELECT * FROM events"   # 查線上資料

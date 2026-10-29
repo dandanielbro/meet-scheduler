@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "bump": "node bump.js"
   },
   "devDependencies": {
     "wrangler": "^4.153.0"

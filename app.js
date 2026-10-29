@@ -207,9 +207,22 @@ async function refreshNow(manual) {
 setInterval(() => { if (document.visibilityState === 'visible') refreshNow(false); }, 20000);
 // 切到別的 App 或關掉 LINE 視窗前，還沒存的先存（fetch 有 keepalive，頁面關了也會送出）
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') refreshNow(false);
+  if (document.visibilityState === 'visible') { checkVersion(); refreshNow(false); }
   else if (dirty) save(true);
 });
+
+// 有新版上線時，開著的舊頁面（例如 LINE 縮小後又叫回來）自動重新載入。正在畫、還沒存的時候不動
+async function checkVersion() {
+  if (DEMO || dirty || savingP || !window.APP_VERSION) return;
+  try {
+    const j = await (await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+    if (!j.v || j.v === window.APP_VERSION || dirty) return;
+    // 重新載入後如果拿到的還是舊頁面（瀏覽器快取），就不要一直重來
+    if (sessionStorage.getItem('ms2:reloadedFor') === j.v) return;
+    sessionStorage.setItem('ms2:reloadedFor', j.v);
+    location.reload();
+  } catch {}
+}
 
 // 換頁前先把還沒存的時間存好，存不成功才問要不要離開
 async function go(url) {
@@ -223,7 +236,7 @@ async function go(url) {
   route();
 }
 function route() {
-  routeId++; refresher = null; renderTop();
+  routeId++; refresher = null; renderTop(); checkVersion();
   window.scrollTo(0, 0);
   const q = new URLSearchParams(location.search);
   if (q.get('e')) renderEvent(q.get('e'), q.has('created'));
@@ -704,6 +717,10 @@ function bindPaint($g, g) {
     const el = document.elementFromPoint(e.clientX, e.clientY);
     return el && el.dataset && el.dataset.i !== undefined && $g.contains(el) ? el : null;
   };
+  // LINE 會把往下滑當成「縮小視窗」：在格子上畫的時候，觸控交給網頁處理，不讓 LINE 接走
+  const hold = (e) => { if (e.cancelable && e.target.closest('.cell')) e.preventDefault(); };
+  $g.addEventListener('touchstart', hold, { passive: false });
+  $g.addEventListener('touchmove', hold, { passive: false });
   $g.addEventListener('pointerdown', (e) => {
     const el = e.target.closest('.cell'); if (!el) return;
     e.preventDefault();
@@ -728,13 +745,15 @@ function bindPaint($g, g) {
 const AUTO_SAVE_MS = 2000;
 let editVer = 0, autoTimer = null, savingP = null, saveAgain = false;
 
+function setSaveMsg(html) { const el = document.getElementById('saveMsg'); if (el) el.innerHTML = html; }
+
 function setDirty(v) {
   dirty = v;
   clearTimeout(autoTimer);
   if (v) {
     editVer++;
     autoTimer = setTimeout(() => save(true), AUTO_SAVE_MS);
-    document.getElementById('saveMsg').innerHTML = '停手 2 秒會自動儲存<br>也可以直接按';
+    setSaveMsg('停手 2 秒會自動儲存<br>也可以直接按');
   }
   document.getElementById('savebar').classList.toggle('show', v);
   drawSaveInline();
@@ -764,7 +783,7 @@ function save(auto) {
 async function doSave(auto) {
   // 先把要存的東西記下來：存的途中可能換頁，或又畫了新的格子
   const rid = routeId, ver = editVer, id = ui.ev.id, slots = ui.draft.join('');
-  const busy = (on) => document.querySelectorAll('[data-save]').forEach((b) => { b.disabled = on; b.textContent = on ? '儲存中…' : '儲存我的時間'; });
+  const busy = (on) => document.querySelectorAll('[data-save], #saveBtn').forEach((b) => { b.disabled = on; b.textContent = on ? '儲存中…' : '儲存我的時間'; });
   clearTimeout(autoTimer);
   busy(true);
   try {
@@ -777,7 +796,7 @@ async function doSave(auto) {
     }
   } catch (err) {
     toast(err.message);
-    document.getElementById('saveMsg').innerHTML = '⚠️ 儲存失敗<br>請按儲存再試一次';
+    setSaveMsg('⚠️ 儲存失敗<br>請按儲存再試一次');
   }
   busy(false);
 }
@@ -891,8 +910,9 @@ function bindOwner() {
 }
 
 // ---------- 啟動 ----------
-document.addEventListener('click', (e) => { if (e.target.closest('[data-save]')) save(); });
-document.getElementById('shareApp').addEventListener('click', shareApp);
+// 舊版網頁（快取）的按鈕沒有 data-save、也沒有分享鈕，一起照顧到
+document.addEventListener('click', (e) => { if (e.target.closest('[data-save], #saveBtn')) save(); });
+document.getElementById('shareApp')?.addEventListener('click', shareApp);
 let lastPP = perPage();
 window.addEventListener('resize', () => {
   if (perPage() === lastPP || !ui.ev || !document.getElementById('heatWrap')) return;
