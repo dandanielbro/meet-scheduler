@@ -743,9 +743,20 @@ function bindPaint($g, g) {
 
 // 自動儲存：最後一次改格子後停 2 秒就存。editVer 記第幾次修改，存的途中又畫了就不算存完
 const AUTO_SAVE_MS = 2000;
-let editVer = 0, autoTimer = null, savingP = null, saveAgain = false;
+let editVer = 0, autoTimer = null, autoDue = 0, savingP = null, saveAgain = false;
 
 function setSaveMsg(html) { const el = document.getElementById('saveMsg'); if (el) el.innerHTML = html; }
+
+// 自動儲存的倒數長條：從滿的慢慢縮到空，空了就存。每次重畫都依剩下的時間接續，不會從頭跑
+function countdownHtml() {
+  const left = autoDue - Date.now();
+  if (left <= 0) return '';
+  return `<div class="countdown"><i style="animation-duration:${AUTO_SAVE_MS}ms;animation-delay:${left - AUTO_SAVE_MS}ms"></i></div>`;
+}
+function drawCountdown() {
+  const el = document.getElementById('saveCd');
+  if (el) el.innerHTML = countdownHtml();
+}
 
 function setDirty(v) {
   dirty = v;
@@ -753,10 +764,12 @@ function setDirty(v) {
   if (v) {
     editVer++;
     autoTimer = setTimeout(() => save(true), AUTO_SAVE_MS);
+    autoDue = Date.now() + AUTO_SAVE_MS;
     setSaveMsg('停手 2 秒會自動儲存<br>也可以直接按');
   }
+  if (!v) autoDue = 0;
   document.getElementById('savebar').classList.toggle('show', v);
-  drawSaveInline();
+  drawCountdown(); drawSaveInline();
 }
 
 // 時間格正下方的儲存狀態：有改就是大按鈕，存好了打勾
@@ -764,7 +777,7 @@ function drawSaveInline() {
   const $s = document.getElementById('saveInline');
   if (!$s || !ui.ev) return;
   const mine = ui.ev.members.find((m) => m.id === auth.me.id);
-  if (dirty) $s.innerHTML = '<button type="button" class="save-cta" data-save>儲存我的時間</button><span class="muted">停手 2 秒會自動儲存</span>';
+  if (dirty) $s.innerHTML = '<button type="button" class="save-cta" data-save>儲存我的時間</button><span class="muted">停手 2 秒會自動儲存</span>' + countdownHtml();
   else if (mine && mine.slots.length === geom(ui.ev.config).total) $s.innerHTML = '<span class="saved">✓ 已儲存</span><span class="muted">要改的話直接畫，會自動儲存</span>';
   else $s.innerHTML = '<span class="muted">畫好後會自動儲存</span>';
 }
@@ -784,7 +797,7 @@ async function doSave(auto) {
   // 先把要存的東西記下來：存的途中可能換頁，或又畫了新的格子
   const rid = routeId, ver = editVer, id = ui.ev.id, slots = ui.draft.join('');
   const busy = (on) => document.querySelectorAll('[data-save], #saveBtn').forEach((b) => { b.disabled = on; b.textContent = on ? '儲存中…' : '儲存我的時間'; });
-  clearTimeout(autoTimer);
+  clearTimeout(autoTimer); autoDue = 0; drawCountdown();
   busy(true);
   try {
     await call('save', { id, slots });

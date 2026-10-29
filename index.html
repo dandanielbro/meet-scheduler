@@ -133,6 +133,13 @@ button.save-cta { background: var(--warn); border-color: var(--warn); color: #ff
 @media (prefers-reduced-motion: reduce) { button.save-cta { animation: none; } }
 .save-inline { margin-top: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .save-inline .saved { color: var(--off); font-weight: 700; }
+/* 自動儲存倒數：橘色長條從滿縮到空 */
+.countdown { height: 8px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--warn) 22%, transparent); }
+.countdown i { display: block; height: 100%; background: var(--warn); border-radius: inherit;
+  transform-origin: left center; animation-name: drain; animation-timing-function: linear; animation-fill-mode: both; }
+@keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.save-inline .countdown { flex-basis: 100%; }
+.savebar .countdown { max-width: 720px; margin: 0 auto 10px; }
 .toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: var(--accent); color: var(--bg);
   padding: 8px 16px; border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
 .toast.show { opacity: 1; }
@@ -146,14 +153,14 @@ button.save-cta { background: var(--warn); border-color: var(--warn); color: #ff
   這個小工具是吞吞做的。<br>有想回饋的地方，或想請我幫忙做點什麼，歡迎到 IG 找我
   <a href="https://www.instagram.com/danielliou0427/" target="_blank" rel="noopener">@danielliou0427</a>
 </footer>
-<div class="savebar" id="savebar"><div class="inner">
+<div class="savebar" id="savebar"><div id="saveCd"></div><div class="inner">
   <span class="grow" id="saveMsg">停手 2 秒會自動儲存<br>也可以直接按</span>
   <button type="button" class="save-cta" data-save>儲存我的時間</button>
 </div></div>
 <div class="toast" id="toast"></div>
-<script>window.APP_VERSION = '20261029-104304';</script>
-<script src="config.js?v=20261029-104304"></script>
-<script src="demo.js?v=20261029-104304"></script>
-<script src="app.js?v=20261029-104304"></script>
+<script>window.APP_VERSION = '20261029-104754';</script>
+<script src="config.js?v=20261029-104754"></script>
+<script src="demo.js?v=20261029-104754"></script>
+<script src="app.js?v=20261029-104754"></script>
 </body>
 </html>
