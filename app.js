@@ -513,36 +513,47 @@ async function act(fn, msg, full) {
   if (full) drawEvent(); else { drawResult(); drawMembers(); drawHeat(); }
 }
 
-// 貼到群組的提醒文字，依目前狀況寫，最後附上連結
+// 貼到群組的提醒文字，依目前狀況寫。一段一件事、段落之間空一行，連結自己一行（LINE 才會變成可以點）
 function reminderText(ev) {
-  const c = ev.config, a = analyze(ev), link = inviteUrl(ev.id);
+  const c = ev.config, a = analyze(ev);
   const modeOf = (k) => (k === 'online' ? '線上' : '線下');
   const names = (list) => list.map((m) => m.name).join('、');
-  const joinNote = ev.status === 'open' ? '\n還沒加入的也可以點連結加入。' : '';
-  let body;
+  const head = [`【${ev.title}】`, `🗓 ${datesSummary(c)}`];
+  if (ev.place) head.push(`📍 ${ev.place}`);
+  const parts = [head.join('\n')];
+  let cta = '👉 點連結填時間';
   if (ev.decided) {
     const d = ev.decided, long = d.end - d.start > a.g.need;
-    body = `📌 時間定好了：${windowLabel(c, d)}（${modeOf(d.mode)}）${long ? `\n這段時間內挑 ${dur(c.minMin)}進行活動。` : ''}\n詳情看這裡 👉`;
+    parts.push(`📌 時間定好了！\n${windowLabel(c, d)}（${modeOf(d.mode)}）${long ? `\n這段時間內挑 ${dur(c.minMin)}進行` : ''}`);
+    cta = '👉 詳情看這裡';
   } else if (!a.filled.length) {
-    body = `來喬時間囉！點連結用 LINE 登入，畫出你可以的時間 🙏${joinNote}\n👉`;
+    parts.push(`來喬時間囉！\n點連結用 LINE 登入，畫出你可以的時間 🙏${ev.status === 'open' ? '\n還沒加入的人點進去就能加入' : ''}`);
   } else if (a.kind) {
-    const ws = a.windows.slice(0, 3).map((w) => `・${windowLabel(c, w)}（${modeOf(a.kind)}）`).join('\n');
-    body = `目前大家都可以的時間：\n${ws}${a.windows.length > 3 ? '\n…還有其他時段' : ''}` +
-      `${a.pending.length ? `\n還沒填的：${names(a.pending)}，麻煩填一下 🙏` : ''}${joinNote}\n👉`;
+    const ws = a.windows.slice(0, 3).map((w) => `・${windowLabel(c, w)}`).join('\n');
+    parts.push(`✅ 目前大家都可以（${modeOf(a.kind)}）\n${ws}${a.windows.length > 3 ? '\n・…還有其他時段' : ''}`);
+    if (a.pending.length) parts.push(`⏳ 還沒填：${names(a.pending)}\n麻煩填一下，結果可能還會變 🙏`);
+    else cta = '👉 點連結看結果';
   } else if (a.pending.length) {
-    body = `還沒填的：${names(a.pending)}，麻煩點連結畫一下你可以的時間 🙏${joinNote}\n👉`;
+    parts.push(`⏳ 還沒填：${names(a.pending)}\n麻煩點連結畫一下你可以的時間 🙏`);
   } else {
-    const x = a.closest[0];
-    body = `大家都填完了，但還找不到 ${dur(c.minMin)}全員都可以的時間 😵` +
-      `${x ? `\n最接近的是 ${windowLabel(c, x)}，差 ${x.missing.join('、')}` : ''}\n可以調整的人再改一下 🙏\n👉`;
+    const close = a.closest.slice(0, 2).map((x) => `・${windowLabel(c, x)}\n　差 ${x.missing.join('、')}`).join('\n');
+    parts.push(`😵 大家都填完了，但找不到 ${dur(c.minMin)}全員都可以的時間`);
+    if (close) parts.push(`最接近的時段：\n${close}`);
+    parts.push('可以調整的人再改一下 🙏');
+    cta = '👉 點連結改時間';
   }
-  return `【${ev.title}】${datesSummary(c)}${ev.place ? `\n📍 地點：${ev.place}` : ''}\n${body} ${link}`;
+  parts.push(`${cta}\n${inviteUrl(ev.id)}`);
+  return parts.join('\n\n');
 }
 
 function drawRemind() {
   const $t = document.getElementById('remindText');
   // 使用者正在改的時候不要蓋掉
-  if ($t && !$t.dataset.edited && document.activeElement !== $t) $t.value = reminderText(ui.ev);
+  if ($t && !$t.dataset.edited && document.activeElement !== $t) {
+    $t.value = reminderText(ui.ev);
+    // 高度跟著內容長，整段一眼看完不用捲
+    $t.style.height = 'auto'; $t.style.height = `${$t.scrollHeight + 2}px`;
+  }
 }
 
 function drawResult() {
@@ -652,7 +663,9 @@ function drawEditor() {
   $wrap.innerHTML = `
     <p class="muted">選一種顏色，在格子上點或拖曳。點日期可以整天填滿。</p>
     <div class="toolbar">${brushes.map(([v, cls, t]) => `<button type="button" class="brush ${v === ui.brush ? 'active' : ''}" data-brush="${v}"><span class="dot ${cls}"></span>${t}</button>`).join('')}</div>
-    ${pagerHtml()}${gridHtml((i) => `<div class="cell v${ui.draft[i]}" data-i="${i}"></div>`, true)}`;
+    ${pagerHtml()}${gridHtml((i) => `<div class="cell v${ui.draft[i]}" data-i="${i}"></div>`, true)}
+    <div class="save-inline" id="saveInline"></div>`;
+  drawSaveInline();
   $wrap.querySelectorAll('.brush').forEach((b) => b.addEventListener('click', () => {
     ui.brush = b.dataset.brush;
     $wrap.querySelectorAll('.brush').forEach((x) => x.classList.toggle('active', x === b));
@@ -704,16 +717,29 @@ function bindPaint($g, g) {
 function setDirty(v) {
   dirty = v;
   document.getElementById('savebar').classList.toggle('show', v);
+  drawSaveInline();
+}
+
+// 時間格正下方的儲存狀態：有改就是大按鈕，存好了打勾
+function drawSaveInline() {
+  const $s = document.getElementById('saveInline');
+  if (!$s || !ui.ev) return;
+  const mine = ui.ev.members.find((m) => m.id === auth.me.id);
+  if (dirty) $s.innerHTML = '<button type="button" class="save-cta" data-save>儲存我的時間</button><span class="muted">畫完要按儲存，大家才看得到</span>';
+  else if (mine && mine.slots.length === geom(ui.ev.config).total) $s.innerHTML = '<span class="saved">✓ 已儲存</span><span class="muted">要改的話直接畫，再按儲存</span>';
+  else $s.innerHTML = '<span class="muted">畫完記得按「儲存我的時間」</span>';
 }
 
 async function save() {
-  const btn = document.getElementById('saveBtn'); btn.disabled = true; btn.textContent = '儲存中…';
+  const busy = (on) => document.querySelectorAll('[data-save]').forEach((b) => { b.disabled = on; b.textContent = on ? '儲存中…' : '儲存我的時間'; });
+  busy(true);
   try {
     await call('save', { id: ui.ev.id, slots: ui.draft.join('') });
-    setDirty(false); toast('已儲存');
-    await loadEv(ui.ev.id); drawResult(); drawMembers(); drawHeat();
+    await loadEv(ui.ev.id);
+    setDirty(false); toast('已儲存，大家看得到你的時間了');
+    drawResult(); drawMembers(); drawHeat();
   } catch (err) { toast(err.message); }
-  btn.disabled = false; btn.textContent = '儲存我的時間';
+  busy(false);
 }
 
 function drawHeat() {
@@ -825,7 +851,7 @@ function bindOwner() {
 }
 
 // ---------- 啟動 ----------
-document.getElementById('saveBtn').addEventListener('click', save);
+document.addEventListener('click', (e) => { if (e.target.closest('[data-save]')) save(); });
 document.getElementById('shareApp').addEventListener('click', shareApp);
 let lastPP = perPage();
 window.addEventListener('resize', () => {

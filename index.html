@@ -118,10 +118,21 @@ button.danger { color: var(--warn); border-color: var(--warn); }
 .link-box { display: flex; gap: 8px; margin: 6px 0 12px; }
 .link-box input { font-size: 16px; min-width: 0; }
 
-.savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); display: none; }
+.savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--warn-soft); border-top: 2px solid var(--warn);
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display: none; z-index: 5; }
 .savebar.show { display: block; }
 .savebar .inner { max-width: 720px; margin: 0 auto; display: flex; gap: 10px; align-items: center; }
+.savebar .inner span { color: var(--warn); font-weight: 700; font-size: 15px; line-height: 1.35; }
+/* 儲存按鈕：大、橘色、會呼吸，提醒畫完要按 */
+button.save-cta { background: var(--warn); border-color: var(--warn); color: #fff; font-weight: 700; font-size: 17px; padding: 12px 22px;
+  animation: pulse 1.6s ease-out infinite; }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 12px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { button.save-cta { animation: none; } }
+.save-inline { margin-top: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.save-inline .saved { color: var(--off); font-weight: 700; }
 .toast { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: var(--accent); color: var(--bg);
   padding: 8px 16px; border-radius: 999px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
 .toast.show { opacity: 1; }
@@ -136,8 +147,8 @@ button.danger { color: var(--warn); border-color: var(--warn); }
   <a href="https://www.instagram.com/danielliou0427/" target="_blank" rel="noopener">@danielliou0427</a>
 </footer>
 <div class="savebar" id="savebar"><div class="inner">
-  <span class="grow muted">你的時間還沒儲存</span>
-  <button class="primary" id="saveBtn">儲存我的時間</button>
+  <span class="grow">⚠️ 還沒儲存！<br>按了大家才看得到</span>
+  <button type="button" class="save-cta" data-save>儲存我的時間</button>
 </div></div>
 <div class="toast" id="toast"></div>
 <script src="config.js"></script>
