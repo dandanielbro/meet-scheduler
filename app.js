@@ -89,7 +89,11 @@ function canShareLine() {
 }
 // 分享這個工具本身：在 LINE 裡用分享選單，其他瀏覽器用系統分享，都沒有就複製
 async function shareApp() {
-  const text = `推薦一個揪團喬時間的小工具：用 LINE 登入，每個人畫出自己可以的時間，會自動找出大家都行的時段 👉 ${appUrl()}`;
+  const text = [
+    '【喬時間】揪團排時間的小工具 🙌',
+    '・用 LINE 登入就能用，不用下載\n・每個人畫出自己可以的時間\n・自動找出大家都行的時段',
+    `👉 點連結開始用\n${appUrl()}`,
+  ].join('\n\n');
   if (canShareLine()) { liff.shareTargetPicker([{ type: 'text', text }]).catch(() => {}); return; }
   if (navigator.share) {
     try { await navigator.share({ text }); return; } catch (err) { if (err.name === 'AbortError') return; }
