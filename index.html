@@ -133,6 +133,12 @@ button.save-cta { background: var(--warn); border-color: var(--warn); color: #ff
 @media (prefers-reduced-motion: reduce) { button.save-cta { animation: none; } }
 .save-inline { margin-top: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .save-inline .saved { color: var(--off); font-weight: 700; }
+.unseen { flex-basis: 100%; display: flex; gap: 8px; align-items: center; background: var(--warn-soft); color: var(--warn);
+  border-radius: 10px; padding: 8px 10px; font-size: 14px; }
+.mine-note { background: var(--cell); border-radius: 10px; padding: 8px 10px; margin: 0 0 10px; font-size: 14px; }
+.mine-note button { margin-left: 4px; }
+details.card summary { cursor: pointer; }
+details.card[open] summary { margin-bottom: 8px; }
 /* 自動儲存倒數：橘色長條從滿縮到空 */
 .countdown { height: 8px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--warn) 22%, transparent); }
 .countdown i { display: block; height: 100%; background: var(--warn); border-radius: inherit;
@@ -158,9 +164,9 @@ button.save-cta { background: var(--warn); border-color: var(--warn); color: #ff
   <button type="button" class="save-cta" data-save>儲存我的時間</button>
 </div></div>
 <div class="toast" id="toast"></div>
-<script>window.APP_VERSION = '20261029-105010';</script>
-<script src="config.js?v=20261029-105010"></script>
-<script src="demo.js?v=20261029-105010"></script>
-<script src="app.js?v=20261029-105010"></script>
+<script>window.APP_VERSION = '20261029-115943';</script>
+<script src="config.js?v=20261029-115943"></script>
+<script src="demo.js?v=20261029-115943"></script>
+<script src="app.js?v=20261029-115943"></script>
 </body>
 </html>
