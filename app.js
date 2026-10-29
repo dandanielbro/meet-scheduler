@@ -79,8 +79,22 @@ function shortDate(s) { const d = parseYmd(s); return `${d.getMonth() + 1}/${d.g
 function avatar(u) {
   return u.picture ? `<img class="avatar" src="${esc(u.picture)}" alt="">` : `<span class="avatar">${esc((u.name || '?').slice(0, 1))}</span>`;
 }
-function inviteUrl(id) {
-  return DEMO ? `${location.origin}${location.pathname}?e=${id}` : `https://liff.line.me/${CONFIG.LIFF_ID}?e=${id}`;
+function appUrl() {
+  return DEMO ? `${location.origin}${location.pathname}` : `https://liff.line.me/${CONFIG.LIFF_ID}`;
+}
+function inviteUrl(id) { return `${appUrl()}?e=${id}`; }
+function canShareLine() {
+  try { return !DEMO && window.liff && liff.isApiAvailable('shareTargetPicker'); } catch { return false; }
+}
+// 分享這個工具本身：在 LINE 裡用分享選單，其他瀏覽器用系統分享，都沒有就複製
+async function shareApp() {
+  const text = `推薦一個揪團喬時間的小工具：用 LINE 登入，每個人畫出自己可以的時間，會自動找出大家都行的時段 👉 ${appUrl()}`;
+  if (canShareLine()) { liff.shareTargetPicker([{ type: 'text', text }]).catch(() => {}); return; }
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; } catch (err) { if (err.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(text); toast('已複製，貼給朋友吧'); }
+  catch { prompt('複製這段文字傳給朋友', text); }
 }
 // 地點：網址就做成連結，一般文字附上 Google 地圖搜尋
 function placeHtml(place) {
@@ -428,7 +442,7 @@ async function renderEvent(id, created) {
   const rid = routeId;
   try { await loadEv(id); } catch (err) { return rid === routeId && showError(err); }
   if (rid !== routeId) return;
-  ui.sel = null; ui.draft = null;
+  ui.sel = null; ui.draft = null; ui.focus = null;
   // 預設翻到還沒過去的第一天
   const today = ymd(new Date());
   const first = ui.ev.config.dates.findIndex((d) => d >= today);
@@ -447,7 +461,7 @@ async function renderEvent(id, created) {
 function drawEvent(created) {
   const ev = ui.ev, c = ev.config;
   document.title = `${ev.title}｜喬時間`;
-  const share = !DEMO && liff.isApiAvailable && liff.isApiAvailable('shareTargetPicker');
+  const share = canShareLine();
   $app.innerHTML = `
     ${demoBanner()}
     <h1>${esc(ev.title)}</h1>
@@ -467,8 +481,7 @@ function drawEvent(created) {
       : '<h2>發起人已關閉加入</h2><p class="muted">需要加入的話，請發起人重新開放。</p>'}</div>`}
     <div class="card"><h2 id="memberTitle">成員</h2><div class="chips" id="members"></div></div>
     ${ev.joined ? '<div class="card"><h2>我的時間</h2><div id="editorWrap"></div></div>' : ''}
-    <div class="card"><h2>大家的時間</h2>
-      <p class="muted">${c.mode === 'both' ? '<span class="dot off"></span> 全部已填的人都能線下　<span class="dot on"></span> 都能線上' : '<span class="dot off"></span> 全部已填的人都可以'}。數字是「可以的人數／已填人數」，點格子看是誰。</p>
+    <div class="card" id="heatCard"><h2>大家的時間</h2>
       <div id="heatWrap"></div><div class="detail" id="detail"></div></div>
     ${ev.isOwner ? ownerCard() : ''}
     ${ev.joined && !ev.isOwner ? '<p><button class="link" id="leaveBtn">退出這個活動</button></p>' : ''}`;
@@ -584,13 +597,17 @@ function drawMembers() {
     const done = m.slots.length === g.total;
     if (!ev.isOwner) return `<span class="chip ${done ? 'done' : ''}">${avatar(m)}${label(m)}${done ? ' ✓' : ''}</span>`;
     return `<div class="mrow">${avatar(m)}<span class="grow">${label(m)}</span>
-      <span class="muted">${done ? '已填 ✓' : '未填'}</span>
+      ${done ? `<button type="button" class="small" data-look="${esc(m.id)}">看時間</button>` : '<span class="muted">未填</span>'}
       ${m.id !== ev.ownerId ? `<button type="button" class="small danger" data-rm="${esc(m.id)}">移出</button>` : ''}</div>`;
   }).join('');
   $m.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => {
     const m = ev.members.find((x) => x.id === b.dataset.rm);
     if (!confirm(`要把 ${m.name} 移出這個活動嗎？他填的時間會一起刪掉。`)) return;
     act(() => call('remove', { id: ev.id, userId: m.id }), '已移除');
+  }));
+  $m.querySelectorAll('[data-look]').forEach((b) => b.addEventListener('click', () => {
+    ui.focus = b.dataset.look; drawHeat();
+    document.getElementById('heatCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
 }
 
@@ -700,9 +717,27 @@ async function save() {
 }
 
 function drawHeat() {
-  const ev = ui.ev, a = analyze(ev), total = a.filled.length;
+  const ev = ui.ev, a = analyze(ev), total = a.filled.length, c = ev.config;
   const $h = document.getElementById('heatWrap');
-  $h.innerHTML = pagerHtml() + gridHtml((i) => {
+  // 發起人可以單獨看某一個人的時間
+  const focus = ev.isOwner ? ev.members.find((m) => m.id === ui.focus) : null;
+  if (!focus) ui.focus = null;
+  const picker = ev.isOwner ? `<div class="row" style="margin-bottom:6px"><span>顯示</span>
+    <select id="focusSel" class="grow"><option value="">全部的人</option>${ev.members.map((m) =>
+      `<option value="${esc(m.id)}" ${focus === m ? 'selected' : ''}>只看 ${esc(m.name)}${m.slots.length === a.g.total ? '' : '（未填）'}</option>`).join('')}</select></div>` : '';
+  if (focus) {
+    const filled = focus.slots.length === a.g.total;
+    const legend = c.mode === 'both'
+      ? '<span class="dot off"></span> 線下可　<span class="dot on"></span> 只能線上　<span class="dot no"></span> 不行'
+      : '<span class="dot off"></span> 可以　<span class="dot no"></span> 不行';
+    $h.innerHTML = picker + `<p class="muted">${esc(focus.name)} 的時間：${legend}</p>` + pagerHtml() +
+      gridHtml((i) => `<div class="cell ${filled ? 'v' + focus.slots[i] : ''}"></div>`, false);
+    bindPager($h); bindFocus($h);
+    document.getElementById('detail').innerHTML = personSummary(focus);
+    return;
+  }
+  const note = `<p class="muted">${c.mode === 'both' ? '<span class="dot off"></span> 全部已填的人都能線下　<span class="dot on"></span> 都能線上' : '<span class="dot off"></span> 全部已填的人都可以'}。數字是「可以的人數／已填人數」，點格子看是誰。</p>`;
+  $h.innerHTML = picker + note + pagerHtml() + gridHtml((i) => {
     const can = a.filled.filter((m) => a.can(m.slots[i])).length;
     const off = a.filled.filter((m) => m.slots[i] === '2').length;
     let cls = '', style = '';
@@ -711,9 +746,34 @@ function drawHeat() {
     else if (can) style = `style="background: color-mix(in srgb, var(--on) ${Math.round(can / total * 45)}%, var(--cell))"`;
     return `<div class="cell ${cls} ${ui.sel === i ? 'sel' : ''}" data-i="${i}" ${style}>${total ? `${can}/${total}` : ''}</div>`;
   }, false);
-  bindPager($h);
+  bindPager($h); bindFocus($h);
   $h.querySelectorAll('.cell').forEach((x) => x.addEventListener('click', () => { ui.sel = +x.dataset.i; drawHeat(); }));
   drawDetail(a);
+}
+
+function bindFocus(root) {
+  const sel = root.querySelector('#focusSel');
+  if (sel) sel.addEventListener('change', () => { ui.focus = sel.value || null; drawHeat(); });
+}
+
+// 一個人每天可以的時段，用文字列出來（手機一次只看得到幾天，文字比較好掃）
+function personSummary(m) {
+  const c = ui.ev.config, g = geom(c);
+  if (m.slots.length !== g.total) return `<span class="muted">${esc(m.name)} 還沒填時間。</span>`;
+  const kind = { 2: c.mode === 'both' ? '線下 ' : '', 1: '只能線上 ' };
+  const lines = [];
+  for (let d = 0; d < g.days; d++) {
+    const parts = [];
+    for (let s = 0; s < g.nslot;) {
+      const v = m.slots[d * g.nslot + s];
+      let e = s + 1;
+      while (e < g.nslot && m.slots[d * g.nslot + e] === v) e++;
+      if (v !== '0') parts.push(`${kind[v]}${slotTime(c, s)}–${slotTime(c, e)}`);
+      s = e;
+    }
+    if (parts.length) lines.push(`${esc(dayLabel(c, d))}：${esc(parts.join('、'))}`);
+  }
+  return `<b>${esc(m.name)} 可以的時間</b><br>${lines.length ? lines.join('<br>') : '每個時段都不行'}`;
 }
 
 function drawDetail(a) {
@@ -766,6 +826,7 @@ function bindOwner() {
 
 // ---------- 啟動 ----------
 document.getElementById('saveBtn').addEventListener('click', save);
+document.getElementById('shareApp').addEventListener('click', shareApp);
 let lastPP = perPage();
 window.addEventListener('resize', () => {
   if (perPage() === lastPP || !ui.ev || !document.getElementById('heatWrap')) return;
