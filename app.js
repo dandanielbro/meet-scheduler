@@ -49,6 +49,7 @@ async function call(action, data = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },  // 避免 CORS 預檢
       body: JSON.stringify(payload),
+      keepalive: true,  // 頁面關掉的瞬間送出的儲存也能送到
     });
     j = await r.json();
   }
@@ -204,10 +205,19 @@ async function refreshNow(manual) {
 }
 // 每 20 秒自動更新；從別的 App 切回來時也馬上更新
 setInterval(() => { if (document.visibilityState === 'visible') refreshNow(false); }, 20000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshNow(false); });
+// 切到別的 App 或關掉 LINE 視窗前，還沒存的先存（fetch 有 keepalive，頁面關了也會送出）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshNow(false);
+  else if (dirty) save(true);
+});
 
-function go(url) {
-  if (dirty && !confirm('你的時間還沒儲存，確定要離開嗎？')) return;
+// 換頁前先把還沒存的時間存好，存不成功才問要不要離開
+async function go(url) {
+  if (dirty || savingP) {
+    while (savingP) await savingP;
+    if (dirty) await save(true);
+    if (dirty && !confirm('你的時間沒有儲存成功，確定要離開嗎？')) return;
+  }
   setDirty(false);
   history.pushState(null, '', url);
   route();
@@ -226,7 +236,7 @@ document.addEventListener('click', (e) => {
   if (!a) return;
   e.preventDefault(); go(a.getAttribute('href'));
 });
-window.addEventListener('popstate', () => { setDirty(false); route(); });
+window.addEventListener('popstate', () => { if (dirty) save(true); setDirty(false); route(); });
 window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 function renderTop() {
@@ -714,8 +724,18 @@ function bindPaint($g, g) {
   }));
 }
 
+// 自動儲存：最後一次改格子後停 2 秒就存。editVer 記第幾次修改，存的途中又畫了就不算存完
+const AUTO_SAVE_MS = 2000;
+let editVer = 0, autoTimer = null, savingP = null, saveAgain = false;
+
 function setDirty(v) {
   dirty = v;
+  clearTimeout(autoTimer);
+  if (v) {
+    editVer++;
+    autoTimer = setTimeout(() => save(true), AUTO_SAVE_MS);
+    document.getElementById('saveMsg').innerHTML = '停手 2 秒會自動儲存<br>也可以直接按';
+  }
   document.getElementById('savebar').classList.toggle('show', v);
   drawSaveInline();
 }
@@ -725,20 +745,40 @@ function drawSaveInline() {
   const $s = document.getElementById('saveInline');
   if (!$s || !ui.ev) return;
   const mine = ui.ev.members.find((m) => m.id === auth.me.id);
-  if (dirty) $s.innerHTML = '<button type="button" class="save-cta" data-save>儲存我的時間</button><span class="muted">畫完要按儲存，大家才看得到</span>';
-  else if (mine && mine.slots.length === geom(ui.ev.config).total) $s.innerHTML = '<span class="saved">✓ 已儲存</span><span class="muted">要改的話直接畫，再按儲存</span>';
-  else $s.innerHTML = '<span class="muted">畫完記得按「儲存我的時間」</span>';
+  if (dirty) $s.innerHTML = '<button type="button" class="save-cta" data-save>儲存我的時間</button><span class="muted">停手 2 秒會自動儲存</span>';
+  else if (mine && mine.slots.length === geom(ui.ev.config).total) $s.innerHTML = '<span class="saved">✓ 已儲存</span><span class="muted">要改的話直接畫，會自動儲存</span>';
+  else $s.innerHTML = '<span class="muted">畫好後會自動儲存</span>';
 }
 
-async function save() {
+// 同一時間只存一次；存的途中又要存，就等這次結束再存一次
+function save(auto) {
+  if (savingP) { saveAgain = true; return savingP; }
+  if (!dirty || !ui.ev) return Promise.resolve();
+  savingP = doSave(auto).finally(() => {
+    savingP = null;
+    if (saveAgain) { saveAgain = false; if (dirty) save(true); }
+  });
+  return savingP;
+}
+
+async function doSave(auto) {
+  // 先把要存的東西記下來：存的途中可能換頁，或又畫了新的格子
+  const rid = routeId, ver = editVer, id = ui.ev.id, slots = ui.draft.join('');
   const busy = (on) => document.querySelectorAll('[data-save]').forEach((b) => { b.disabled = on; b.textContent = on ? '儲存中…' : '儲存我的時間'; });
+  clearTimeout(autoTimer);
   busy(true);
   try {
-    await call('save', { id: ui.ev.id, slots: ui.draft.join('') });
-    await loadEv(ui.ev.id);
-    setDirty(false); toast('已儲存，大家看得到你的時間了');
-    drawResult(); drawMembers(); drawHeat();
-  } catch (err) { toast(err.message); }
+    await call('save', { id, slots });
+    if (ver === editVer) setDirty(false);
+    toast(auto ? '✓ 已自動儲存' : '已儲存，大家看得到你的時間了');
+    if (rid === routeId) {
+      await loadEv(id);
+      if (rid === routeId) { drawResult(); drawMembers(); drawHeat(); drawSaveInline(); }
+    }
+  } catch (err) {
+    toast(err.message);
+    document.getElementById('saveMsg').innerHTML = '⚠️ 儲存失敗<br>請按儲存再試一次';
+  }
   busy(false);
 }
 
