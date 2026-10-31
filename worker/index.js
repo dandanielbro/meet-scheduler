@@ -53,7 +53,7 @@ async function verifyLine(token, env) {
 function d1Store(db) {
   const now = () => Date.now();
   const toEvent = (r) => r && {
-    id: r.id, ownerId: r.owner_id, title: r.title, place: r.place || '', config: JSON.parse(r.config),
+    id: r.id, ownerId: r.owner_id, title: r.title, place: r.place || '', expect: r.expect || 0, config: JSON.parse(r.config),
     status: r.status, decided: r.decided ? JSON.parse(r.decided) : null,
   };
   return {
@@ -89,12 +89,12 @@ function d1Store(db) {
     },
 
     insertEvent: (e) => db.prepare(
-      'INSERT INTO events (id, owner_id, title, place, config, status, decided, created_at, updated_at) VALUES (?1, ?2, ?3, ?6, ?4, \'open\', NULL, ?5, ?5)',
-    ).bind(e.id, e.ownerId, e.title, JSON.stringify(e.config), now(), e.place).run(),
+      'INSERT INTO events (id, owner_id, title, place, expect, config, status, decided, created_at, updated_at) VALUES (?1, ?2, ?3, ?6, ?7, ?4, \'open\', NULL, ?5, ?5)',
+    ).bind(e.id, e.ownerId, e.title, JSON.stringify(e.config), now(), e.place, e.expect).run(),
 
     updateEvent: (id, e) => db.prepare(
-      'UPDATE events SET title = ?2, status = ?3, decided = ?4, updated_at = ?5, place = ?6 WHERE id = ?1',
-    ).bind(id, e.title, e.status, e.decided ? JSON.stringify(e.decided) : null, now(), e.place).run(),
+      'UPDATE events SET title = ?2, status = ?3, decided = ?4, updated_at = ?5, place = ?6, expect = ?7 WHERE id = ?1',
+    ).bind(id, e.title, e.status, e.decided ? JSON.stringify(e.decided) : null, now(), e.place, e.expect).run(),
 
     addMember: (eventId, userId) => db.prepare(
       'INSERT OR IGNORE INTO members (event_id, user_id, slots, joined_at, updated_at) VALUES (?1, ?2, \'\', ?3, ?3)',

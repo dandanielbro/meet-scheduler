@@ -184,7 +184,8 @@ function analyze(ev) {
       if (!dup) closest.push(x);
     }
   }
-  return { g, filled, pending, windows: windows.length ? windows : [], kind: windows.length ? kind : null, closest, can };
+  const joinWait = Math.max(0, (ev.expect || 0) - ev.members.length);
+  return { g, filled, pending, windows: windows.length ? windows : [], kind: windows.length ? kind : null, closest, can, joinWait };
 }
 
 function statusOf(ev) {
@@ -192,6 +193,7 @@ function statusOf(ev) {
   if (ev.decided) return `📌 已定案：${windowLabel(c, ev.decided)}（${ev.decided.mode === 'online' ? '線上' : '線下'}）`;
   const a = analyze(ev);
   const wait = a.pending.length ? `，還在等 ${a.pending.length} 人` : '';
+  if (a.joinWait) return `⏳ 還有人還沒加入（${ev.members.length}/${ev.expect} 人）`;
   if (!a.filled.length) return '⏳ 還沒有人填';
   if (a.kind) return `${a.kind === 'offline' ? '✅ 線下' : '💻 線上'}：${windowLabel(c, a.windows[0])}${a.windows.length > 1 ? ` 等 ${a.windows.length} 個時段` : ''}${wait}`;
   return a.pending.length ? `⏳ 還在等 ${a.pending.length} 人填` : '⚠️ 大家都填了，但找不到時間';
@@ -316,7 +318,7 @@ function eventCard(ev) {
   const todo = mine && mine.slots.length !== g.total && !ev.decided;
   return `<a class="card ev" href="?e=${ev.id}" data-nav>
     <div class="row"><b class="grow">${esc(ev.title)}</b>${ev.isOwner ? '<span class="tag">發起人</span>' : ''}${todo ? '<span class="tag warn">你還沒填</span>' : ''}</div>
-    <div class="muted">${esc(datesSummary(ev.config))}・${ev.members.length} 人${ev.place ? `・📍 ${esc(ev.place.length > 20 ? ev.place.slice(0, 20) + '…' : ev.place)}` : ''}</div>
+    <div class="muted">${esc(datesSummary(ev.config))}・${ev.members.length}${ev.expect ? `/${ev.expect}` : ''} 人${ev.place ? `・📍 ${esc(ev.place.length > 20 ? ev.place.slice(0, 20) + '…' : ev.place)}` : ''}</div>
     <div class="st">${esc(statusOf(ev))}</div></a>`;
 }
 
@@ -346,6 +348,9 @@ async function renderNew(copyId) {
       <input id="title" required maxlength="40" placeholder="例如：讀書會 A 組" value="${esc(src ? src.title : '')}">
       <label for="place">地點（選填）</label>
       <input id="place" maxlength="100" placeholder="例如：板橋車站附近的咖啡廳，或線上會議連結" value="${esc(src ? src.place : '')}">
+      <label for="expect">預計幾個人（選填，含你自己）</label>
+      <input id="expect" type="number" inputmode="numeric" min="2" max="50" placeholder="例如 6" value="${src && src.expect ? src.expect : ''}">
+      <p class="muted">填了的話，加入的人數到齊之前不會顯示結果，免得只有一兩個人填就說找到時間。</p>
       <span class="label">哪幾天（點日期選取，最多 ${MAX_DAYS} 天）</span>
       <div class="seg" style="margin-bottom:8px">
         <button type="button" data-quick="0">這週末</button>
@@ -421,12 +426,14 @@ async function renderNew(copyId) {
       minMin: +document.getElementById('minMin').value,
     };
     if (!config.dates.length) return toast('請至少選一天');
+    const expect = document.getElementById('expect').value.trim();
+    if (expect && !(+expect >= 2 && +expect <= 50)) return toast('預計人數請填 2 到 50');
     if (config.startMin >= config.endMin) return toast('結束時間要比開始晚');
     if (config.minMin > config.endMin - config.startMin) return toast('活動長度比每天的時段還長');
     const btn = document.getElementById('createBtn'); btn.disabled = true; btn.textContent = '建立中…';
     try {
       const cm = document.getElementById('copyMembers');
-      const { id } = await call('create', { title: document.getElementById('title').value, place: document.getElementById('place').value, config,
+      const { id } = await call('create', { title: document.getElementById('title').value, place: document.getElementById('place').value, expect: +expect || 0, config,
         copyFrom: src ? src.id : '', copyMembers: !!(cm && cm.checked) });
       const { dates, ...rest } = config;
       store.set('lastConfig', rest);
@@ -584,6 +591,9 @@ function reminderText(ev) {
     const d = ev.decided, long = d.end - d.start > a.g.need;
     parts.push(`📌 時間定好了！\n${windowLabel(c, d)}（${modeOf(d.mode)}）${long ? `\n這段時間內挑 ${dur(effMin(c))}就好` : ''}`);
     cta = '👉 詳情看這裡';
+  } else if (a.joinWait) {
+    parts.push(`⏳ 還有人還沒加入（目前 ${ev.members.length}/${ev.expect} 人）\n還沒加入的點連結加入，畫一下你可以的時間 🙏`);
+    if (a.pending.length) parts.push(`還沒填：${names(a.pending)}`);
   } else if (!a.filled.length) {
     parts.push(`來喬時間囉！\n點連結用 LINE 登入，畫出你可以的時間 🙏${ev.status === 'open' ? '\n還沒加入的人點進去就能加入' : ''}`);
   } else if (a.kind) {
@@ -631,7 +641,7 @@ function drawResult() {
   const a = analyze(ev);
   const total = ev.members.length;
   // 自己還沒算進去的時候說清楚，免得以為時間已經定好、不用填
-  const notMe = a.filled.length && !myFilled(ev)
+  const notMe = a.filled.length && !a.joinWait && !myFilled(ev)
     ? `<p class="mine-note">${ev.joined ? '你還沒填，下面是' : '你還沒加入，下面是'}已填的 ${a.filled.length} 人的結果。
       ${ev.joined ? '<button type="button" class="small primary" id="goFill">去畫我的時間</button>' : ''}</p>` : '';
   const who = a.pending.length ? `已填的 ${a.filled.length} 人` : '大家';
@@ -640,7 +650,12 @@ function drawResult() {
   const waitNote = a.pending.length
     ? `<p class="muted">已填 ${a.filled.length}/${total} 人，還在等：${esc(a.pending.map((m) => m.name).join('、'))}。結果可能還會變。</p>` : '';
   let html;
-  if (!a.filled.length) {
+  if (a.joinWait) {
+    html = `<div class="status wait"><h2>⏳ 還有人還沒加入</h2>
+      <p>預計 ${ev.expect} 人，目前加入 ${total} 人。人到齊、填好之後，才會算出大家都可以的時間。</p>
+      ${a.pending.length ? `<p class="muted">已加入但還沒填：${esc(a.pending.map((m) => m.name).join('、'))}</p>` : ''}
+      ${ev.isOwner ? '<p class="muted">人數估錯了？到下面「發起人設定」改預計人數。</p>' : ''}</div>`;
+  } else if (!a.filled.length) {
     html = `<div class="status wait"><h2>還沒有人填</h2><p>${ev.joined ? '在「我的時間」畫出你可以的時間。' : '加入後就能填時間。'}</p></div>`;
   } else if (a.kind === 'offline') {
     html = `<div class="status ok-off"><h2>✅ ${c.mode === 'both' ? '可以線下見面' : '找到時間了'}</h2><p>這些時間${who}都能到場：</p>${list(a.windows)}${waitNote}</div>`;
@@ -664,7 +679,7 @@ function drawResult() {
 
 function drawMembers() {
   const ev = ui.ev, g = geom(ev.config);
-  document.getElementById('memberTitle').textContent = `成員（${ev.members.length}）`;
+  document.getElementById('memberTitle').textContent = `成員（${ev.members.length}${ev.expect ? `／預計 ${ev.expect}` : ''}）`;
   const $m = document.getElementById('members');
   const label = (m) => `${esc(m.name)}${m.id === ev.ownerId ? '（發起人）' : ''}`;
   // 發起人看到的是一列一人、每人旁邊有「移出」；其他人看到名字小卡
@@ -957,6 +972,8 @@ function ownerCard() {
     <div class="row"><input id="ownTitle" class="grow" maxlength="40" value="${esc(ev.title)}"><button type="button" id="ownTitleBtn">改名</button></div>
     <label for="ownPlace">地點（選填，留空就是不顯示）</label>
     <div class="row"><input id="ownPlace" class="grow" maxlength="100" value="${esc(ev.place)}" placeholder="地點或線上會議連結"><button type="button" id="ownPlaceBtn">儲存地點</button></div>
+    <label for="ownExpect">預計人數（選填，留空就是不設定）</label>
+    <div class="row"><input id="ownExpect" class="grow" type="number" inputmode="numeric" min="2" max="50" value="${ev.expect || ''}" placeholder="例如 6"><button type="button" id="ownExpectBtn">儲存人數</button></div>
     <span class="label">加入</span>
     <div class="row"><span class="grow">${ev.status === 'open' ? '開放中：拿到連結的人都能加入' : '已關閉：只有現有成員'}</span>
       <button type="button" id="ownStatus">${ev.status === 'open' ? '關閉加入' : '重新開放'}</button></div>
@@ -972,6 +989,11 @@ function bindOwner() {
   const ev = ui.ev;
   document.getElementById('ownPlaceBtn').addEventListener('click', () =>
     act(() => call('update', { id: ev.id, place: document.getElementById('ownPlace').value }), '地點已更新', true));
+  document.getElementById('ownExpectBtn').addEventListener('click', () => {
+    const v = document.getElementById('ownExpect').value.trim();
+    if (v && !(+v >= 2 && +v <= 50)) return toast('預計人數請填 2 到 50');
+    act(() => call('update', { id: ev.id, expect: +v || 0 }), v ? '預計人數已更新' : '已取消預計人數', true);
+  });
   document.getElementById('ownTitleBtn').addEventListener('click', () =>
     act(() => call('update', { id: ev.id, title: document.getElementById('ownTitle').value }), '已改名', true));
   document.getElementById('ownStatus').addEventListener('click', () =>

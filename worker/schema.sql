@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS events (
   owner_id TEXT NOT NULL,
   title TEXT NOT NULL,
   place TEXT NOT NULL DEFAULT '', -- 地點（選填）
+  expect INTEGER NOT NULL DEFAULT 0, -- 預計人數（選填），0＝沒設定
   config TEXT NOT NULL,         -- JSON：日期、每天時段、每格長度、活動長度、形式
   status TEXT NOT NULL DEFAULT 'open',
   decided TEXT,                 -- JSON：定案的時段，沒定案是 NULL
